@@ -13,11 +13,14 @@
       contactInfoLink: 'a[href*="/overlay/contact-info/"], #topcard-contact-info'
     },
     salesql: {
+      iframes: 'iframe[src*="salesql"], iframe[id*="salesql"]',
+      popup: 'sq-popup, [class*="salesql-popup"], [class*="salesql-widget"], .salesql-container, sq-root',
       widgetReady: [
         'sq-button',
         '.salesql-button',
         '[class*="salesql"]',
-        '[id*="salesql"]'
+        '[id*="salesql"]',
+        'iframe[src*="salesql"]'
       ],
       revealButton: 'sq-button, button.salesql-button, .salesql-reveal-button, [class*="salesql-button"]',
       revealTextKeywords: [
@@ -27,9 +30,13 @@
         "reveal contact", 
         "reveal email", 
         "salesql", 
-        "show email"
+        "show email",
+        "unlock",
+        "view email",
+        "access",
+        "get contact"
       ],
-      emailContainer: 'span, div, a, p, sq-copy-text, .salesql-email, [class*="salesql-email"]'
+      emailLinks: 'a[href^="mailto:"], sq-copy-text'
     }
   };
 

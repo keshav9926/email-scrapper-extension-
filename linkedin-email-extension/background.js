@@ -351,7 +351,7 @@ async function runStaticQueueLoop() {
           if (scrapePromiseResolve === resolve) {
             resolve({ email: "", status: "Timeout" });
           }
-        }, 30000);
+        }, 45000);
       });
 
       // Close the tab
@@ -474,7 +474,7 @@ async function runActiveSheetLoop() {
             if (scrapePromiseResolve === resolve) {
               resolve({ email: "", status: "Timeout" });
             }
-          }, 30000);
+          }, 45000);
         });
 
         // Close the tab

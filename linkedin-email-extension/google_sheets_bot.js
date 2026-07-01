@@ -2,7 +2,15 @@
 
 (() => {
   if (window.hasSheetsBotAttached) {
-    console.log("[SheetsBot] Already attached to this tab.");
+    console.log("[SheetsBot] Already attached to this tab. Re-registering frame...");
+    const fb = document.querySelector('#t-formula-bar-input') || 
+               document.querySelector('#FormulaBarTextDiv') || 
+               document.querySelector('[aria-label="Formula Bar"]') ||
+               document.querySelector('.formula-bar-text-editor') ||
+               document.querySelector('[role="textbox"][aria-label="Formula Bar"]');
+    if (fb || document.querySelector('.grid-keyboard-handler')) {
+      chrome.runtime.sendMessage({ cmd: "sheets_bot_register" });
+    }
     return;
   }
   window.hasSheetsBotAttached = true;
@@ -156,4 +164,20 @@
   });
 
   console.log("[SheetsBot] Content script loaded and listening.");
+
+  // Register active editor frame with background service worker
+  let registered = false;
+  function tryRegister() {
+    if (registered) return;
+    if (getFormulaBar() || document.querySelector('.grid-keyboard-handler')) {
+      chrome.runtime.sendMessage({ cmd: "sheets_bot_register" });
+      registered = true;
+      console.log("[SheetsBot] Registered active editor frame with background.");
+    }
+  }
+
+  tryRegister();
+  for (let i = 1; i <= 10; i++) {
+    setTimeout(tryRegister, i * 500);
+  }
 })();
