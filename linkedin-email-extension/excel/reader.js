@@ -34,7 +34,7 @@ export function readExcel(arrayBuffer) {
     return {
       id: index + 1,
       company: companyName || "Unknown",
-      linkedin: linkedinUrl || "",
+      linkedin: (linkedinUrl && linkedinUrl.startsWith("https://www.linkedin.com/")) ? linkedinUrl.trim() : "",
       raw: row
     };
   });

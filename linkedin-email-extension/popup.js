@@ -23,9 +23,7 @@ const btnStop = document.getElementById('btnStop');
 const btnClearLogs = document.getElementById('btnClearLogs');
 const consoleLogs = document.getElementById('consoleLogs');
 
-const btnLoadUrl = document.getElementById('btnLoadUrl');
-const sheetUrlInput = document.getElementById('sheetUrlInput');
-const btnAutomateTab = document.getElementById('btnAutomateTab');
+
 
 // Initialize Dashboard
 document.addEventListener('DOMContentLoaded', async () => {
@@ -35,11 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 2. File select event
   fileInput.addEventListener('change', handleFileSelect);
 
-  // 3. Link load event
-  btnLoadUrl.addEventListener('click', handleUrlLoad);
 
-  // 4. Active tab automation event
-  btnAutomateTab.addEventListener('click', handleAutomateTab);
 
   // 5. Control Button events
   btnPause.addEventListener('click', handlePause);
@@ -118,11 +112,11 @@ async function handleFileSelect() {
     }
     
     // Validate rows
-    const validRows = rows.filter(row => row.linkedin || row.company);
-    addLog(`Successfully parsed Excel file. Found ${validRows.length} rows with LinkedIn profiles or company names.`, "success");
+    const validRows = rows.filter(row => row.linkedin !== "");
+    addLog(`Successfully parsed Excel file. Found ${validRows.length} rows with LinkedIn profiles.`, "success");
     
     if (validRows.length === 0) {
-      addLog("Error: No rows containing a LinkedIn URL or Company Name were detected.", "error");
+      addLog("Error: No rows containing a valid LinkedIn URL were detected.", "error");
       return;
     }
 
@@ -278,56 +272,4 @@ function clearConsole() {
   addLog("Console cleared.", "system");
 }
 
-/**
- * Triggers background script to fetch and parse the Google Sheet.
- */
-function handleUrlLoad() {
-  const url = sheetUrlInput.value.trim();
-  if (!url) {
-    addLog("Please enter a Google Sheets URL.", "error");
-    return;
-  }
-  
-  addLog("Sending link to background worker...", "info");
-  
-  chrome.runtime.sendMessage({ cmd: "loadSheetUrl", url: url }, (response) => {
-    if (chrome.runtime.lastError) {
-      addLog("Failed to communicate with background scraper.", "error");
-      return;
-    }
-    
-    if (response && response.success) {
-      addLog(`Loaded Google Sheet successfully! Found ${response.count} profiles. Starting scrape queue...`, "success");
-    } else {
-      const errorMsg = response ? response.error : "Unknown error";
-      addLog(`Failed to load Google Sheet: ${errorMsg}`, "error");
-    }
-  });
-}
 
-/**
- * Triggers background script to automate the currently active Google Sheets tab.
- */
-function handleAutomateTab() {
-  addLog("Attempting to connect to your open Google Sheet...", "info");
-  
-  chrome.runtime.sendMessage({ cmd: "startActiveSheet" }, (response) => {
-    if (chrome.runtime.lastError) {
-      addLog("Failed to start active sheet automation.", "error");
-      return;
-    }
-    
-    if (response && response.success) {
-      addLog("SheetsBot active! Keep this extension window open and don't close the Google Sheets tab.", "success");
-      
-      // Update badge to Active
-      uploadSection.classList.add('hidden');
-      dashboardSection.classList.remove('hidden');
-      statusBadge.innerText = "Running";
-      statusBadge.className = "status-badge status-running";
-    } else {
-      const errorMsg = response ? response.error : "Unknown error";
-      addLog(`Failed to start: ${errorMsg}`, "error");
-    }
-  });
-}
