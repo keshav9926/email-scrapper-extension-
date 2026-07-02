@@ -50,8 +50,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       detectedTabTitle.innerText = activeTab.title || "Unnamed Spreadsheet";
       
       const activeTabUrl = activeTab.url;
+      const activeTabId = activeTab.id;
       btnScrapeActiveTab.addEventListener('click', () => {
-        handleLoadUrl(activeTabUrl);
+        handleLoadUrl(activeTabUrl, activeTabId);
       });
     }
   });
@@ -79,9 +80,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   await restoreSession();
 });
 
-function handleLoadUrl(url) {
+function handleLoadUrl(url, tabId = null) {
   addLog("Retrieving spreadsheet link...", "info");
-  chrome.runtime.sendMessage({ cmd: "loadSheetUrl", url: url }, (response) => {
+  chrome.runtime.sendMessage({ cmd: "loadSheetUrl", url: url, tabId: tabId }, (response) => {
     if (chrome.runtime.lastError) {
       addLog("Failed to send message to background worker.", "error");
       return;

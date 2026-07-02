@@ -174,10 +174,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } catch (directErr) {
         log(`Direct fetch failed: ${directErr.message}. Attempting to fetch via browser tab session...`, "warn");
         try {
-          const base64Data = await fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId);
+          const base64Data = await fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, msg.tabId);
           arrayBuffer = dataURLToArrayBuffer(base64Data);
         } catch (tabErr) {
-          throw new Error("This sheet is private. Please share the sheet as 'Anyone with the link can view' or ensure you have the tab open in your browser.");
+          throw new Error(`This sheet is private. Please share the sheet as 'Anyone with the link can view' or ensure you have the tab open in your browser. Details: ${tabErr.message}`);
         }
       }
       
@@ -495,25 +495,44 @@ function getLinkedInUrl(val) {
 /**
  * Helper to fetch sheet content using an active tab session to bypass private sheet restrictions.
  */
-async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId) {
-  const tabs = await chrome.tabs.query({});
-  let targetTab = tabs.find(t => t.url && t.url.includes(spreadsheetId));
-  let created = false;
+async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, tabId) {
+  let targetTab = null;
+  if (tabId) {
+    targetTab = await chrome.tabs.get(tabId).catch(() => null);
+  }
   
+  const tabs = await chrome.tabs.query({});
   if (!targetTab) {
-    // Open a temporary background tab
+    targetTab = tabs.find(t => t.url && t.url.includes(spreadsheetId));
+  }
+  
+  let created = false;
+  if (!targetTab) {
+    log("Spreadsheet tab not found. Creating a temporary background tab...");
     targetTab = await chrome.tabs.create({ url, active: false });
     created = true;
     // Wait for the page to initialize and fetch cookies
-    await new Promise(r => setTimeout(r, 4000));
+    await new Promise(r => setTimeout(r, 5000));
   }
   
   try {
+    // Wait until the tab URL is on docs.google.com and not loading/redirecting
+    let retries = 10;
+    while (retries > 0) {
+      const tabInfo = await chrome.tabs.get(targetTab.id).catch(() => null);
+      if (tabInfo && tabInfo.url && tabInfo.url.includes("docs.google.com") && tabInfo.status === "complete") {
+        break;
+      }
+      await new Promise(r => setTimeout(r, 1000));
+      retries--;
+    }
+    
+    log(`Injecting download script into tab ${targetTab.id}...`);
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: targetTab.id },
       func: async (fetchUrl) => {
         const resp = await fetch(fetchUrl);
-        if (!resp.ok) throw new Error(`Fetch failed inside tab: ${resp.status}`);
+        if (!resp.ok) throw new Error(`Fetch failed inside tab context (HTTP ${resp.status})`);
         const blob = await resp.blob();
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
