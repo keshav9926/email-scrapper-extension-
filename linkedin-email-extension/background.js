@@ -161,43 +161,54 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     
     log("Attempting to fetch Google Sheet workbook...");
     
-    fetch(exportUrl, { credentials: 'include' })
-      .then(async (response) => {
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            throw new Error("This sheet is private. Please share the sheet as 'Anyone with the link can view' or ensure you have access permissions.");
-          }
-          throw new Error(`Fetch failed (HTTP ${response.status})`);
+    (async () => {
+      let arrayBuffer;
+      try {
+        // Try direct fetch first
+        const response = await fetch(exportUrl, { credentials: 'include' });
+        if (response.ok) {
+          arrayBuffer = await response.arrayBuffer();
+        } else {
+          throw new Error(`Direct fetch failed (HTTP ${response.status})`);
         }
-        return response.arrayBuffer();
-      })
-      .then(arrayBuffer => {
-        const rows = readExcel(arrayBuffer);
-        if (!rows || rows.length === 0) {
-          throw new Error("No rows found in the sheet.");
+      } catch (directErr) {
+        log(`Direct fetch failed: ${directErr.message}. Attempting to fetch via browser tab session...`, "warn");
+        try {
+          const base64Data = await fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId);
+          arrayBuffer = dataURLToArrayBuffer(base64Data);
+        } catch (tabErr) {
+          throw new Error("This sheet is private. Please share the sheet as 'Anyone with the link can view' or ensure you have the tab open in your browser.");
         }
-        
-        // Rows must contain a LinkedIn profile link
-        const validRows = rows.filter(row => row.linkedin !== "");
-        if (validRows.length === 0) {
-          throw new Error("No rows with valid LinkedIn links detected in the sheet.");
-        }
-        
-        clearAll().then(() => {
-          queueManager.initialize(validRows);
-          exportManager.clear();
-          saveState().then(() => {
-            runStaticQueueLoop();
-          });
-        });
-        
-        sendResponse({ success: true, count: validRows.length });
-      })
-      .catch(err => {
-        error("Failed to load Google Sheet", err);
-        sendResponse({ success: false, error: err.message || String(err) });
-      });
+      }
       
+      const rows = readExcel(arrayBuffer);
+      if (!rows || rows.length === 0) {
+        throw new Error("No rows found in the sheet.");
+      }
+      
+      // Rows must contain a LinkedIn profile link
+      const validRows = rows.filter(row => row.linkedin !== "");
+      if (validRows.length === 0) {
+        throw new Error("No rows with valid LinkedIn links detected in the sheet.");
+      }
+      
+      await clearAll();
+      queueManager.initialize(validRows);
+      exportManager.clear();
+      await saveState();
+      
+      runStaticQueueLoop();
+      
+      return { success: true, count: validRows.length };
+    })()
+    .then((result) => {
+      sendResponse(result);
+    })
+    .catch((err) => {
+      error("Failed to load Google Sheet", err);
+      sendResponse({ success: false, error: err.message || String(err) });
+    });
+    
     return true;
   }
 });
@@ -479,4 +490,63 @@ function getLinkedInUrl(val) {
   }
   
   return null;
+}
+
+/**
+ * Helper to fetch sheet content using an active tab session to bypass private sheet restrictions.
+ */
+async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId) {
+  const tabs = await chrome.tabs.query({});
+  let targetTab = tabs.find(t => t.url && t.url.includes(spreadsheetId));
+  let created = false;
+  
+  if (!targetTab) {
+    // Open a temporary background tab
+    targetTab = await chrome.tabs.create({ url, active: false });
+    created = true;
+    // Wait for the page to initialize and fetch cookies
+    await new Promise(r => setTimeout(r, 4000));
+  }
+  
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      func: async (fetchUrl) => {
+        const resp = await fetch(fetchUrl);
+        if (!resp.ok) throw new Error(`Fetch failed inside tab: ${resp.status}`);
+        const blob = await resp.blob();
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      },
+      args: [exportUrl]
+    });
+    
+    if (created) {
+      chrome.tabs.remove(targetTab.id).catch(() => {});
+    }
+    return result;
+  } catch (err) {
+    if (created) {
+      chrome.tabs.remove(targetTab.id).catch(() => {});
+    }
+    throw err;
+  }
+}
+
+/**
+ * Converts base64 Data URL to ArrayBuffer.
+ */
+function dataURLToArrayBuffer(dataUrl) {
+  const base64 = dataUrl.split(',')[1];
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
