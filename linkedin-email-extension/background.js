@@ -531,15 +531,22 @@ async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, tabId) {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: targetTab.id },
       func: async (fetchUrl) => {
-        const resp = await fetch(fetchUrl);
-        if (!resp.ok) throw new Error(`Fetch failed inside tab context (HTTP ${resp.status})`);
-        const blob = await resp.blob();
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
+        try {
+          const resp = await fetch(fetchUrl);
+          if (!resp.ok) {
+            return { success: false, error: `Fetch failed inside tab context: HTTP ${resp.status}` };
+          }
+          const blob = await resp.blob();
+          const base64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error("FileReader failed to convert sheet blob"));
+            reader.readAsDataURL(blob);
+          });
+          return { success: true, data: base64 };
+        } catch (e) {
+          return { success: false, error: e.message || String(e) };
+        }
       },
       args: [exportUrl]
     });
@@ -547,7 +554,16 @@ async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, tabId) {
     if (created) {
       chrome.tabs.remove(targetTab.id).catch(() => {});
     }
-    return result;
+    
+    if (!result) {
+      throw new Error("Script injection returned empty result from the tab.");
+    }
+    
+    if (!result.success) {
+      throw new Error(result.error || "Unknown error during tab download execution");
+    }
+    
+    return result.data;
   } catch (err) {
     if (created) {
       chrome.tabs.remove(targetTab.id).catch(() => {});
