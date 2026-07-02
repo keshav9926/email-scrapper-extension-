@@ -22,7 +22,10 @@ export function readExcel(arrayBuffer) {
     for (const key of Object.keys(row)) {
       const lowerKey = key.toLowerCase().trim();
       if (lowerKey.includes("linkedin") || lowerKey === "url" || lowerKey === "profile" || lowerKey === "link") {
-        linkedinUrl = String(row[key]).trim();
+        const val = String(row[key]).trim();
+        if (val && !linkedinUrl) {
+          linkedinUrl = val;
+        }
       }
       if (lowerKey.includes("company") || lowerKey.includes("firm")) {
         companyName = String(row[key]).trim();

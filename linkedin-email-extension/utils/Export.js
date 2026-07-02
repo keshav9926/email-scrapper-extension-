@@ -24,7 +24,11 @@ export class ExportManager {
       email: rowData.email || "",
       status: rowData.status || "Not Found",
       timestamp: new Date().toISOString(),
-      raw: rowData.raw || null
+      raw: rowData.raw || null,
+      scrapedName: rowData.scrapedName || "",
+      scrapedTitle: rowData.scrapedTitle || "",
+      scrapedCompany: rowData.scrapedCompany || "",
+      scrapedLinkedin: rowData.scrapedLinkedin || ""
     };
 
     if (existingIndex > -1) {

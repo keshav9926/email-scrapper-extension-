@@ -3,7 +3,7 @@
   "name": "LinkedIn Email Scraper",
   "version": "1.0",
   "description": "Reads an Excel of LinkedIn URLs, uses Apify to extract emails, and exports results.",
-  "permissions": ["storage", "downloads", "tabs", "activeTab", "scripting"],
+  "permissions": ["storage", "downloads", "tabs", "activeTab", "scripting", "unlimitedStorage"],
   "host_permissions": [
     "https://api.apify.com/*",
     "https://docs.google.com/*"

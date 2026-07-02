@@ -27,27 +27,20 @@ const exportManager = new ExportManager();
 
 // Global configuration loaded dynamically from .env
 let APIFY_TOKEN = "";
-const APIFY_ACTOR_KEY = "x_guru~linkedin-email-Scraper-no-cookies";
+const APIFY_ACTOR_KEY = "snipercoder~bulk-linkedin-email-finder";
 
 async function initApifyConfig() {
   try {
     const url = chrome.runtime.getURL('.env');
     const resp = await fetch(url);
     const text = await resp.text();
-    const tokenMatch = text.match(/token=([a-zA-Z0-9_]+)/i);
-    if (tokenMatch) {
-      APIFY_TOKEN = tokenMatch[1];
-      log(`Apify token successfully loaded from .env: ${APIFY_TOKEN.substring(0, 8)}...`);
-    } else {
-      const lines = text.split('\n');
-      for (const line of lines) {
-        if (line.toLowerCase().includes("token=")) {
-          const m = line.match(/token=([a-zA-Z0-9_]+)/i);
-          if (m) {
-            APIFY_TOKEN = m[1];
-            break;
-          }
-        }
+    const lines = text.split('\n');
+    for (const line of lines) {
+      const parts = line.split('=');
+      if (parts[0] && parts[0].trim().toLowerCase() === 'token') {
+        APIFY_TOKEN = parts.slice(1).join('=').trim();
+        log(`Apify token successfully loaded from .env: ${APIFY_TOKEN.substring(0, 8)}...`);
+        break;
       }
     }
   } catch (e) {
@@ -162,26 +155,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     log("Attempting to fetch Google Sheet workbook...");
     
     (async () => {
-      let arrayBuffer;
+      let rows;
       try {
         // Try direct fetch first
         const response = await fetch(exportUrl, { credentials: 'include' });
         if (response.ok) {
-          arrayBuffer = await response.arrayBuffer();
+          const arrayBuffer = await response.arrayBuffer();
+          rows = readExcel(arrayBuffer);
         } else {
           throw new Error(`Direct fetch failed (HTTP ${response.status})`);
         }
       } catch (directErr) {
-        log(`Direct fetch failed: ${directErr.message}. Attempting to fetch via browser tab session...`, "warn");
+        log(`Export endpoint unavailable. trying GViz... Details: ${directErr.message}`, "warn");
         try {
-          const base64Data = await fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, msg.tabId);
-          arrayBuffer = dataURLToArrayBuffer(base64Data);
+          const rawText = await fetchPrivateSheetViaTab(url, spreadsheetId, msg.tabId);
+          rows = parseGvizResponse(rawText);
         } catch (tabErr) {
-          throw new Error(`This sheet is private. Please share the sheet as 'Anyone with the link can view' or ensure you have the tab open in your browser. Details: ${tabErr.message}`);
+          throw new Error(`Failed to load Google Sheet via active tab session: ${tabErr.message}`);
         }
       }
       
-      const rows = readExcel(arrayBuffer);
       if (!rows || rows.length === 0) {
         throw new Error("No rows found in the sheet.");
       }
@@ -219,13 +212,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function startApifyRun(urls) {
   const endpoint = `https://api.apify.com/v2/acts/${APIFY_ACTOR_KEY}/runs?token=${APIFY_TOKEN}`;
   const payload = {
-    includePersonalEmails: true,
-    includeWorkEmails: true,
-    onlyWithEmails: true,
-    linkedinUrls: urls,
-    profileUrls: urls
+    linkedin_url_or_ids: urls
   };
-  console.log("Apify payload:", payload);
+  console.log("Payload:", JSON.stringify(payload, null, 2));
+  console.log("INPUT");
+  console.log(payload);
+  log("Apify input payload: " + JSON.stringify(payload));
   
   const response = await fetch(endpoint, {
     method: "POST",
@@ -241,6 +233,9 @@ async function startApifyRun(urls) {
   }
   
   const json = await response.json();
+  console.log("RUN");
+  console.log(json);
+  log("Apify start run result: " + JSON.stringify(json.data));
   return json.data;
 }
 
@@ -254,6 +249,11 @@ async function pollApifyRun(runId) {
     throw new Error(`Failed to fetch run status: HTTP ${response.status}`);
   }
   const json = await response.json();
+  console.log(json.data);
+  log("Apify polling raw data: " + JSON.stringify(json.data));
+  if (json.data && json.data.status === 'FAILED') {
+    log(`Apify run failed! Message: ${json.data.statusMessage || 'No status message provided.'}`, 'error');
+  }
   return json.data.status;
 }
 
@@ -266,7 +266,9 @@ async function fetchDatasetItems(datasetId) {
   if (!response.ok) {
     throw new Error(`Failed to fetch dataset items: HTTP ${response.status}`);
   }
-  return await response.json();
+  const json = await response.json();
+  console.log(json);
+  return json;
 }
 
 /**
@@ -275,16 +277,23 @@ async function fetchDatasetItems(datasetId) {
 function getValidEmail(result) {
   if (!result) return "";
   const candidates = [
+    result["04_Email"],
+    result.email,
     result.workEmail,
     result.personalEmail,
-    result.email,
     result.work_email,
-    ...(Array.isArray(result.personal_emails) ? result.personal_emails : []),
-    result.personal_emails,
-    result.has_email
+    result.personal_email,
+    result.businessEmail,
+    result.publicEmail,
+    result.contactEmail,
+    ...(Array.isArray(result.personalEmails) ? result.personalEmails : typeof result.personalEmails === 'string' ? [result.personalEmails] : []),
+    ...(Array.isArray(result.workEmails) ? result.workEmails : typeof result.workEmails === 'string' ? [result.workEmails] : []),
+    ...(Array.isArray(result.emails) ? result.emails : typeof result.emails === 'string' ? [result.emails] : []),
+    ...(Array.isArray(result.personal_emails) ? result.personal_emails : typeof result.personal_emails === 'string' ? [result.personal_emails] : []),
+    ...(Array.isArray(result.work_emails) ? result.work_emails : typeof result.work_emails === 'string' ? [result.work_emails] : [])
   ];
   for (const c of candidates) {
-    if (typeof c === 'string' && c.includes('@') && c.includes('.')) {
+    if (typeof c === 'string' && c.includes('@')) {
       return c.trim();
     }
   }
@@ -341,9 +350,18 @@ async function runStaticQueueLoop() {
     try {
       // 1. START_APIFY_RUN
       bgMachine.transition(States.START_APIFY_RUN, { url: linkedin });
+      console.log("LinkedIn being sent:", linkedin);
       const runInfo = await startApifyRun([linkedin]);
+      console.log("RUN INFO");
+      console.log(runInfo);
+      console.log(runInfo.status);
+      console.log("INITIAL RUN STATUS:", runInfo.status);
       const runId = runInfo.id;
-      const datasetId = runInfo.defaultDatasetId;
+      const datasetId = runInfo.defaultDatasetId || runInfo.datasetId;
+      if (!datasetId) {
+        throw new Error(`Failed to retrieve dataset ID from runInfo: ${JSON.stringify(runInfo)}`);
+      }
+      console.log(`runId: ${runId}, datasetId: ${datasetId}`);
       
       await saveState();
       
@@ -352,6 +370,8 @@ async function runStaticQueueLoop() {
       let status = runInfo.status;
       
       while (isRunning && (status === 'READY' || status === 'RUNNING')) {
+        console.log(status);
+        console.log("POLLING STATUS ITERATION:", status);
         await new Promise(resolve => setTimeout(resolve, 3000));
         status = await pollApifyRun(runId);
         log(`Apify run status: ${status}`);
@@ -368,23 +388,55 @@ async function runStaticQueueLoop() {
       // 3. FETCH_APIFY_DATASET
       bgMachine.transition(States.FETCH_APIFY_DATASET, { datasetId });
       const items = await fetchDatasetItems(datasetId);
+      console.log("DATASET");
+      console.log(items);
       log(`Fetched ${items.length} records from Apify for this row.`);
+      log("Apify dataset items: " + JSON.stringify(items, null, 2));
       
       // 4. SAVE
       bgMachine.transition(States.SAVE);
       
-      const result = items[0];
+      console.log("FULL APIFY DATASET", JSON.stringify(items, null, 2));
+      const result = items && items[0];
+      console.log("RESULT RECORD FOR PARSING:", JSON.stringify(result, null, 2));
+      console.log(JSON.stringify(result, null, 2));
       const email = getValidEmail(result);
-      const finalStatus = email ? "Found" : "No Email";
+      
+      const reason = result ? result["02_First_name"] : "";
+      let finalStatus = "Unknown";
+      if (reason === "email not found.") {
+        finalStatus = "Email Not Found";
+      } else if (email) {
+        finalStatus = "Found";
+      } else {
+        finalStatus = "Unknown";
+      }
+      
+      const scrapedName = result ? result["01_Name"] : "";
+      const scrapedTitle = result ? result["07_Title"] : "";
+      const scrapedCompany = result ? result["16_Company_name"] : "";
+      const scrapedLinkedin = result ? result["17_Query_linkedin"] : "";
       
       // Mark job as Done with email and status
-      queueManager.markDone(job.id, { email, status: finalStatus, linkedin });
+      queueManager.markDone(job.id, { 
+        email, 
+        status: finalStatus, 
+        linkedin,
+        scrapedName,
+        scrapedTitle,
+        scrapedCompany,
+        scrapedLinkedin
+      });
       
       // Append results
       await exportManager.appendResult(job.id, {
         ...job.data,
         email,
-        status: finalStatus
+        status: finalStatus,
+        scrapedName,
+        scrapedTitle,
+        scrapedCompany,
+        scrapedLinkedin
       });
       
       await saveState();
@@ -493,9 +545,66 @@ function getLinkedInUrl(val) {
 }
 
 /**
+ * Parses the raw GViz response format into structured row objects.
+ */
+function parseGvizResponse(text) {
+  log("GViz response preview: " + text.substring(0, 500));
+  const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*?)\);/);
+  if (!match) {
+    throw new Error("Invalid GViz response format. Response did not match setResponse pattern.");
+  }
+  
+  const json = JSON.parse(match[1]);
+  if (json.status === "error") {
+    const errorMsg = json.errors && json.errors[0] ? json.errors[0].detailed_message : "Unknown Google Sheets GViz error";
+    throw new Error(errorMsg);
+  }
+  
+  const table = json.table;
+  if (!table || !table.cols || !table.rows) {
+    throw new Error("No table data found in GViz response.");
+  }
+  
+  const cols = table.cols.map((col, idx) => col.label || col.id || `Col${idx}`);
+  
+  return table.rows.map((row, index) => {
+    let linkedinUrl = "";
+    let companyName = "";
+    const rawRow = {};
+    
+    if (row && row.c) {
+      row.c.forEach((cell, cellIndex) => {
+        const colName = cols[cellIndex];
+        const val = cell && cell.v !== null && cell.v !== undefined ? String(cell.v).trim() : "";
+        rawRow[colName] = val;
+        
+        const lowerKey = colName.toLowerCase().trim();
+        if (lowerKey.includes("linkedin") || lowerKey === "url" || lowerKey === "profile" || lowerKey === "link") {
+          if (val && !linkedinUrl) {
+            linkedinUrl = val;
+          }
+        }
+        if (lowerKey.includes("company") || lowerKey.includes("firm")) {
+          companyName = val;
+        } else if (lowerKey === "name" && !companyName) {
+          companyName = val;
+        }
+      });
+    }
+    
+    return {
+      id: index + 1,
+      company: companyName || "Unknown",
+      linkedin: (linkedinUrl && linkedinUrl.startsWith("https://www.linkedin.com/")) ? linkedinUrl.trim() : "",
+      raw: rawRow
+    };
+  });
+}
+
+/**
  * Helper to fetch sheet content using an active tab session to bypass private sheet restrictions.
  */
-async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, tabId) {
+async function fetchPrivateSheetViaTab(url, spreadsheetId, tabId) {
   let targetTab = null;
   if (tabId) {
     targetTab = await chrome.tabs.get(tabId).catch(() => null);
@@ -511,13 +620,11 @@ async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, tabId) {
     log("Spreadsheet tab not found. Creating a temporary background tab...");
     targetTab = await chrome.tabs.create({ url, active: false });
     created = true;
-    // Wait for the page to initialize and fetch cookies
-    await new Promise(r => setTimeout(r, 5000));
   }
   
   try {
     // Wait until the tab URL is on docs.google.com and not loading/redirecting
-    let retries = 10;
+    let retries = 15;
     while (retries > 0) {
       const tabInfo = await chrome.tabs.get(targetTab.id).catch(() => null);
       if (tabInfo && tabInfo.url && tabInfo.url.includes("docs.google.com") && tabInfo.status === "complete") {
@@ -527,45 +634,54 @@ async function fetchPrivateSheetViaTab(url, exportUrl, spreadsheetId, tabId) {
       retries--;
     }
     
-    log(`Injecting download script into tab ${targetTab.id}...`);
-    const [{ result }] = await chrome.scripting.executeScript({
+    // Parse GID from sheet URL
+    let gid = "0";
+    const gidMatch = url.match(/[?&]gid=([0-9]+)/);
+    if (gidMatch) {
+      gid = gidMatch[1];
+    }
+    const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&gid=${gid}`;
+    log(`GViz Query URL: ${gvizUrl}`);
+    
+    log(`Injecting data fetch script into tab ${targetTab.id} using GViz endpoint...`);
+    const results = await chrome.scripting.executeScript({
       target: { tabId: targetTab.id },
+      world: "ISOLATED",
       func: async (fetchUrl) => {
         try {
-          const resp = await fetch(fetchUrl);
+          const resp = await fetch(fetchUrl, { credentials: "include" });
           if (!resp.ok) {
             return { success: false, error: `Fetch failed inside tab context: HTTP ${resp.status}` };
           }
-          const blob = await resp.blob();
-          const base64 = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.onerror = () => reject(new Error("FileReader failed to convert sheet blob"));
-            reader.readAsDataURL(blob);
-          });
-          return { success: true, data: base64 };
+          const text = await resp.text();
+          return { success: true, data: text };
         } catch (e) {
           return { success: false, error: e.message || String(e) };
         }
       },
-      args: [exportUrl]
+      args: [gvizUrl]
     });
     
-    if (created) {
+    if (created && targetTab) {
       chrome.tabs.remove(targetTab.id).catch(() => {});
     }
     
+    if (!results || results.length === 0) {
+      throw new Error("Script injection returned no results array.");
+    }
+    
+    const { result } = results[0];
     if (!result) {
-      throw new Error("Script injection returned empty result from the tab.");
+      throw new Error("Script injection returned undefined/null result.");
     }
     
     if (!result.success) {
-      throw new Error(result.error || "Unknown error during tab download execution");
+      throw new Error(result.error || "Unknown error during tab data fetch execution");
     }
     
     return result.data;
   } catch (err) {
-    if (created) {
+    if (created && targetTab) {
       chrome.tabs.remove(targetTab.id).catch(() => {});
     }
     throw err;

@@ -19,6 +19,10 @@ export function exportToExcelDataUrl(results) {
       "LinkedIn URL": item.linkedin,
       "Email": item.email || "",
       "Status": item.status || "Not Found",
+      "Scraped Name": item.scrapedName || "",
+      "Scraped Title": item.scrapedTitle || "",
+      "Scraped Company": item.scrapedCompany || "",
+      "Scraped LinkedIn": item.scrapedLinkedin || "",
       "Timestamp": item.timestamp || new Date().toISOString()
     };
     
@@ -35,7 +39,8 @@ export function exportToExcelDataUrl(results) {
                          lowerKey === "name" ||
                          lowerKey === "email" ||
                          lowerKey === "status" ||
-                         lowerKey === "timestamp";
+                         lowerKey === "timestamp" ||
+                         lowerKey.includes("scraped");
         if (!isMapped) {
           row[key] = val;
         }
