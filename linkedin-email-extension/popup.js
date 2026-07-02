@@ -33,7 +33,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 2. File select event
   fileInput.addEventListener('change', handleFileSelect);
 
+  // 3. Active Sheet / URL events
+  const activeTabZone = document.getElementById('activeTabZone');
+  const activeTabPlaceholder = document.getElementById('activeTabPlaceholder');
+  const detectedTabTitle = document.getElementById('detectedTabTitle');
+  const btnScrapeActiveTab = document.getElementById('btnScrapeActiveTab');
+  const sheetUrlInput = document.getElementById('sheetUrlInput');
+  const btnLoadUrl = document.getElementById('btnLoadUrl');
 
+  // Detect active tab and display "Active Tab Scrape" if it is a Google Sheet
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const activeTab = tabs[0];
+    if (activeTab && activeTab.url && activeTab.url.includes("docs.google.com/spreadsheets")) {
+      activeTabZone.classList.remove('hidden');
+      activeTabPlaceholder.classList.add('hidden');
+      detectedTabTitle.innerText = activeTab.title || "Unnamed Spreadsheet";
+      
+      const activeTabUrl = activeTab.url;
+      btnScrapeActiveTab.addEventListener('click', () => {
+        handleLoadUrl(activeTabUrl);
+      });
+    }
+  });
+
+  btnLoadUrl.addEventListener('click', () => {
+    const url = sheetUrlInput.value.trim();
+    if (!url) {
+      addLog("Please enter a valid Google Sheets URL.", "warn");
+      return;
+    }
+    handleLoadUrl(url);
+  });
 
   // 5. Control Button events
   btnPause.addEventListener('click', handlePause);
@@ -48,6 +78,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 6. Restore current status
   await restoreSession();
 });
+
+function handleLoadUrl(url) {
+  addLog("Retrieving spreadsheet link...", "info");
+  chrome.runtime.sendMessage({ cmd: "loadSheetUrl", url: url }, (response) => {
+    if (chrome.runtime.lastError) {
+      addLog("Failed to send message to background worker.", "error");
+      return;
+    }
+    if (response && response.success) {
+      addLog(`Successfully loaded spreadsheet. Starting automation for ${response.count} rows.`, "success");
+      // Update local storage status and stats immediately
+      restoreSession();
+    } else {
+      const errorMsg = (response && response.error) ? response.error : "Unknown error";
+      addLog(`Failed to load link: ${errorMsg}`, "error");
+    }
+  });
+}
 
 /**
  * Checks current state of background scraper and restores UI state.

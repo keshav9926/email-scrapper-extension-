@@ -24,18 +24,46 @@
     <!-- Main Content Area -->
     <main class="app-main">
       
-      <!-- Upload Section -->
+      <!-- Upload / Link Section -->
       <section id="uploadSection" class="card upload-card">
-        <div class="upload-zone" id="dropZone">
+        <!-- Active Tab Quick Scrape -->
+        <div id="activeTabZone" class="active-tab-zone hidden">
+          <div class="active-tab-header">
+            <div class="pulse-dot"></div>
+            <h4>Active Google Sheet Detected</h4>
+          </div>
+          <p class="tab-title" id="detectedTabTitle">Fetching title...</p>
+          <button id="btnScrapeActiveTab" class="btn btn-primary">
+            <svg class="btn-icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+            Scrape Active Tab Sheet
+          </button>
+        </div>
+
+        <div id="activeTabPlaceholder" class="active-tab-zone-placeholder">
+          <p>Open a Google Sheet tab to scrape it directly without uploading.</p>
+        </div>
+
+        <div class="divider"><span>OR PASTE LINK</span></div>
+
+        <!-- URL Input Group -->
+        <div class="url-zone">
+          <div class="url-input-group">
+            <input type="text" id="sheetUrlInput" placeholder="Paste Google Sheets Share Link..." />
+            <button id="btnLoadUrl" class="btn btn-primary">Load & Scrape</button>
+          </div>
+        </div>
+
+        <div class="divider"><span>OR UPLOAD EXCEL</span></div>
+
+        <!-- Drag & Drop / File Input -->
+        <div class="upload-zone" id="dropZone" style="padding: 14px 20px;">
           <input type="file" id="fileInput" accept=".xlsx, .xls" />
-          <svg class="upload-icon" viewBox="0 0 24 24" width="48" height="48">
+          <svg class="upload-icon" viewBox="0 0 24 24" width="28" height="28" style="margin-bottom: 4px;">
             <path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
           </svg>
-          <h3>Upload Excel File</h3>
-          <p>Drag and drop your spreadsheet here or click to browse</p>
-          <span class="file-spec">Supported formats: .xlsx, .xls</span>
+          <span style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 2px;">Upload Local Excel</span>
+          <span class="file-spec" style="font-size: 9px; color: var(--text-muted);">Click to browse or drop here</span>
         </div>
-        
       </section>
 
       <!-- Dashboard Statistics (Hidden initially) -->

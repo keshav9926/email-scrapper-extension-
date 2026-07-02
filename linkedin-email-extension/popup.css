@@ -482,3 +482,62 @@ body {
 .hidden {
   display: none !important;
 }
+
+/* Active Tab Zone styling */
+.active-tab-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px dashed rgba(99, 102, 241, 0.3);
+  border-radius: 8px;
+  padding: 12px 16px;
+  text-align: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.active-tab-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.active-tab-header h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-primary);
+  box-shadow: 0 0 6px var(--color-primary);
+  animation: pulse 1.5s infinite;
+}
+
+.tab-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-main);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.active-tab-zone-placeholder {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}

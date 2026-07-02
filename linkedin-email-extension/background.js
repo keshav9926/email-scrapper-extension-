@@ -4,6 +4,7 @@
 import './excel/xlsx.full.min.js';
 
 // Import our modular components
+import { readExcel } from './excel/reader.js';
 import { QueueManager } from './utils/QueueManager.js';
 import { ExportManager } from './utils/Export.js';
 import { log, error, warn } from './utils/logger.js';
@@ -142,6 +143,61 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }).catch((e) => {
       sendResponse({ success: false, error: e.message || String(e) });
     });
+    return true;
+  }
+  
+  else if (msg.cmd === "loadSheetUrl") {
+    const { url } = msg;
+    log(`Requested to load Google Sheet URL: ${url}`);
+    
+    const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    if (!match) {
+      sendResponse({ success: false, error: "Invalid Google Sheets link format." });
+      return;
+    }
+    
+    const spreadsheetId = match[1];
+    const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=xlsx`;
+    
+    log("Attempting to fetch Google Sheet workbook...");
+    
+    fetch(exportUrl, { credentials: 'include' })
+      .then(async (response) => {
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            throw new Error("This sheet is private. Please share the sheet as 'Anyone with the link can view' or ensure you have access permissions.");
+          }
+          throw new Error(`Fetch failed (HTTP ${response.status})`);
+        }
+        return response.arrayBuffer();
+      })
+      .then(arrayBuffer => {
+        const rows = readExcel(arrayBuffer);
+        if (!rows || rows.length === 0) {
+          throw new Error("No rows found in the sheet.");
+        }
+        
+        // Rows must contain a LinkedIn profile link
+        const validRows = rows.filter(row => row.linkedin !== "");
+        if (validRows.length === 0) {
+          throw new Error("No rows with valid LinkedIn links detected in the sheet.");
+        }
+        
+        clearAll().then(() => {
+          queueManager.initialize(validRows);
+          exportManager.clear();
+          saveState().then(() => {
+            runStaticQueueLoop();
+          });
+        });
+        
+        sendResponse({ success: true, count: validRows.length });
+      })
+      .catch(err => {
+        error("Failed to load Google Sheet", err);
+        sendResponse({ success: false, error: err.message || String(err) });
+      });
+      
     return true;
   }
 });
