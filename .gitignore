@@ -1,3 +1,10 @@
 # Exclude environment variables containing sensitive keys
 linkedin-email-extension/.env
 .env
+
+# Exclude node_modules
+node_modules/
+
+# Exclude generated scraped output excel files
+scraped_*.xlsx
+scraped_*.xls
