@@ -28,8 +28,36 @@ const exportManager = new ExportManager();
 let activeSheetTabId = null;
 let activeSheetLoopRunning = false;
 let activeSheetFrameId = 0;
-let activeTabId = null;
-let scrapePromiseResolve = null;
+
+// Global configuration loaded dynamically from .env
+let APIFY_TOKEN = "";
+const APIFY_ACTOR_KEY = "x_guru~linkedin-email-Scraper-no-cookies";
+
+async function initApifyConfig() {
+  try {
+    const url = chrome.runtime.getURL('.env');
+    const resp = await fetch(url);
+    const text = await resp.text();
+    const tokenMatch = text.match(/token=([a-zA-Z0-9_]+)/i);
+    if (tokenMatch) {
+      APIFY_TOKEN = tokenMatch[1];
+      log(`Apify token successfully loaded from .env: ${APIFY_TOKEN.substring(0, 8)}...`);
+    } else {
+      const lines = text.split('\n');
+      for (const line of lines) {
+        if (line.toLowerCase().includes("token=")) {
+          const m = line.match(/token=([a-zA-Z0-9_]+)/i);
+          if (m) {
+            APIFY_TOKEN = m[1];
+            break;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    warn("Failed to load .env file, using default fallback token.");
+  }
+}
 
 // Initialize state from storage on startup (crash recovery)
 (async () => {
@@ -46,7 +74,7 @@ let scrapePromiseResolve = null;
       log(`Restored session state: ${queueManager.getDone().length + queueManager.getFailed().length}/${queueManager.size()} processed.`);
       
       if (isRunning) {
-        isRunning = false; // Reset to allow loop to re-enter
+        isRunning = false; 
         runStaticQueueLoop();
       } else if (activeSheetLoopRunning) {
         activeSheetLoopRunning = false;
@@ -141,9 +169,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           throw new Error("No rows found in the sheet.");
         }
         
-        const validRows = rows.filter(row => row.linkedin);
+        // Rows must contain either a LinkedIn link or a company name to resolve
+        const validRows = rows.filter(row => row.linkedin || row.company);
         if (validRows.length === 0) {
-          throw new Error("No rows with valid LinkedIn links detected.");
+          throw new Error("No rows with valid LinkedIn links or company names detected.");
         }
         
         clearAll().then(() => {
@@ -230,26 +259,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   }
-
-  else if (msg.cmd === "scrape_response") {
-    if (scrapePromiseResolve) {
-      scrapePromiseResolve(msg);
-      scrapePromiseResolve = null;
-    }
-    sendResponse({ success: true });
-  }
-
-  else if (msg.cmd === "content_state_change") {
-    log(`[ContentState] ${msg.state}`, msg.metadata);
-  }
 });
 
 /**
- * Safely routes messages to the registered active sheet iframe, falling back to the main frame if needed.
+ * Safely routes messages to the registered active sheet iframe.
  */
 async function sendSheetMessage(msg) {
   return new Promise((resolve, reject) => {
+    let completed = false;
+    const timer = setTimeout(() => {
+      if (!completed) {
+        completed = true;
+        reject(new Error("Sheet message timeout"));
+      }
+    }, 8000);
+
     chrome.tabs.sendMessage(activeSheetTabId, msg, { frameId: activeSheetFrameId }, (response) => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(timer);
+
       if (chrome.runtime.lastError) {
         chrome.tabs.sendMessage(activeSheetTabId, msg, (fallbackResp) => {
           if (chrome.runtime.lastError) {
@@ -266,136 +295,258 @@ async function sendSheetMessage(msg) {
 }
 
 /**
- * Returns a promise that resolves when the given tab finishes loading.
+ * Search DuckDuckGo for the LinkedIn profile of the first co-founder or founder.
  */
-async function waitForTabComplete(tabId, timeoutMs = 25000) {
-  return new Promise((resolve, reject) => {
-    const listener = (changeTabId, changeInfo) => {
-      if (changeTabId === tabId && changeInfo.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve(true);
-      }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-    
-    // Check if it's already complete
-    chrome.tabs.get(tabId, (tab) => {
-      if (tab && tab.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve(true);
-      }
-    });
-
-    setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error("Tab load timeout"));
-    }, timeoutMs);
+async function findFounderProfile(companyName) {
+  const query = encodeURIComponent(`founder OR "co-founder" "${companyName}" site:linkedin.com/in/`);
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${query}`;
+  
+  const response = await fetch(searchUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
   });
+  
+  if (!response.ok) {
+    throw new Error(`DuckDuckGo search failed: HTTP ${response.status}`);
+  }
+  
+  const html = await response.text();
+  const matches = html.match(/linkedin\.com\/in\/[a-zA-Z0-9%_-]+/g);
+  
+  if (matches && matches.length > 0) {
+    let foundUrl = matches[0];
+    if (!foundUrl.startsWith("http")) {
+      foundUrl = "https://www." + foundUrl;
+    }
+    return foundUrl;
+  }
+  
+  return null;
 }
 
 /**
- * Main worker loop for static spreadsheet queues.
+ * Trigger an Apify Actor Run.
+ */
+async function startApifyRun(urls) {
+  const endpoint = `https://api.apify.com/v2/acts/${APIFY_ACTOR_KEY}/runs?token=${APIFY_TOKEN}`;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        includePersonalEmails: true,
+        includeWorkEmails: true,
+        onlyWithEmails: true,
+        linkedinUrls: urls,
+        profileUrls: urls
+      })
+    });
+  
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to start Apify actor run: HTTP ${response.status} - ${errText}`);
+  }
+  
+  const json = await response.json();
+  return json.data;
+}
+
+/**
+ * Fetch status of Apify run.
+ */
+async function pollApifyRun(runId) {
+  const endpoint = `https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_TOKEN}`;
+  const response = await fetch(endpoint);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch run status: HTTP ${response.status}`);
+  }
+  const json = await response.json();
+  return json.data.status;
+}
+
+/**
+ * Fetch elements from completed dataset.
+ */
+async function fetchDatasetItems(datasetId) {
+  const endpoint = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}`;
+  const response = await fetch(endpoint);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch dataset items: HTTP ${response.status}`);
+  }
+  return await response.json();
+}
+
+/**
+ * Main worker loop for static spreadsheet queues running concurrently via Apify.
+ */
+/**
+ * Main worker loop for static spreadsheet queues running concurrently via Apify.
  */
 async function runStaticQueueLoop() {
   if (isRunning) return;
   isRunning = true;
   
-  log(`Scraping queue started. Remaining: ${queueManager.getPending().length}`);
+  await initApifyConfig();
   
-  while (isRunning && !queueManager.isEmpty()) {
-    const currentJob = queueManager.getNextPending();
-    if (!currentJob) break;
+  if (!APIFY_TOKEN) {
+    error("No Apify token found in .env! Please add token=YOUR_APIFY_TOKEN to the .env file in the extension folder.");
+    isRunning = false;
+    bgMachine.transition(States.IDLE);
+    return;
+  }
+  
+  const BATCH_SIZE = 30;
+  
+  while (isRunning) {
+    const pendingJobs = queueManager.getPending();
+    if (pendingJobs.length === 0) {
+      break;
+    }
     
-    log(`Processing row ${currentJob.id}: ${currentJob.data.company} -> ${currentJob.data.linkedin}`);
+    const currentBatch = pendingJobs.slice(0, BATCH_SIZE);
+    log(`Processing batch of ${currentBatch.length} profiles...`);
     
-    const cleanUrl = getLinkedInUrl(currentJob.data.linkedin);
-    if (!cleanUrl) {
-      warn(`Skipping invalid URL for ${currentJob.data.company}: "${currentJob.data.linkedin}"`);
-      bgMachine.transition(States.SAVE, { jobId: currentJob.id, status: "Invalid URL" });
-      queueManager.markFailed(currentJob.id, "Invalid URL");
-      await exportManager.appendResult(currentJob.id, currentJob.data);
+    const urls = [];
+    const jobUrlMap = new Map(); // jobId -> resolved founder profile URL
+    
+    for (const job of currentBatch) {
+      let targetUrl = null;
+      const company = job.data.company;
+      const originalUrl = getLinkedInUrl(job.data.linkedin);
+
+      // 1. If direct personal LinkedIn URL exists, prioritize and use it
+      if (originalUrl && !originalUrl.includes("/company/")) {
+        targetUrl = originalUrl;
+        log(`Using direct LinkedIn URL for ${company || "row"}: ${targetUrl}`);
+      } 
+      // 2. If it's a company URL, extract handle and search founder
+      else if (originalUrl && originalUrl.includes("/company/")) {
+        const handleMatch = originalUrl.match(/\/company\/([a-zA-Z0-9\-_]+)/);
+        const handle = handleMatch ? handleMatch[1] : "";
+        if (handle) {
+          try {
+            targetUrl = await findFounderProfile(handle);
+          } catch (e) {}
+        }
+      }
+      
+      // 3. Fallback: Search founder by company name
+      if (!targetUrl && company && company !== "Unknown") {
+        try {
+          targetUrl = await findFounderProfile(company);
+          if (targetUrl) {
+            log(`Resolved founder profile for "${company}": ${targetUrl}`);
+          }
+        } catch (err) {
+          warn(`Failed to resolve founder for "${company}": ${err.message}`);
+        }
+      }
+      
+      // 4. Ultimate fallback to the original URL if we resolved absolutely nothing
+      if (!targetUrl && originalUrl) {
+        targetUrl = originalUrl;
+      }
+      
+      if (targetUrl) {
+        urls.push(targetUrl);
+        jobUrlMap.set(job.id, targetUrl);
+      } else {
+        warn(`Could not resolve any LinkedIn URL for row ${job.id}`);
+      }
+    }
+    
+    if (urls.length === 0) {
+      // Mark this batch as failed to prevent infinite loops
+      for (const job of currentBatch) {
+        queueManager.markFailed(job.id, 'No URL resolved');
+        await exportManager.appendResult(job.id, job.data);
+      }
       await saveState();
       continue;
     }
-
+    
     try {
-      // 1. OPEN_PROFILE
-      bgMachine.transition(States.OPEN_PROFILE, { url: cleanUrl });
-      const tab = await chrome.tabs.create({ url: cleanUrl, active: true });
-      activeTabId = tab.id;
-
-      // 2. WAIT_READY
-      bgMachine.transition(States.WAIT_READY);
-      await waitForTabComplete(activeTabId);
-
-      // 3. START_SCRAPER
-      bgMachine.transition(States.START_SCRAPER);
-      await chrome.scripting.executeScript({
-        target: { tabId: activeTabId },
-        files: [
-          "utils/selectors.js",
-          "utils/WaitManager.js",
-          "utils/DOMObserver.js",
-          "utils/StateMachine.js",
-          "utils/RetryManager.js",
-          "content.js"
-        ]
+      // 1. START_APIFY_RUN
+      bgMachine.transition(States.START_APIFY_RUN, { urlCount: urls.length });
+      const runInfo = await startApifyRun(urls);
+      const runId = runInfo.id;
+      const datasetId = runInfo.defaultDatasetId;
+      
+      currentBatch.forEach(job => {
+        job.state = 'Running';
       });
-
-      // 4. WAIT_RESULT
-      bgMachine.transition(States.WAIT_RESULT);
-      const result = await new Promise((resolve) => {
-        scrapePromiseResolve = resolve;
-        // Safety timeout to prevent locking if tab is closed
-        setTimeout(() => {
-          if (scrapePromiseResolve === resolve) {
-            resolve({ email: "", status: "Timeout" });
-          }
-        }, 45000);
-      });
-
-      // Close the tab
-      try {
-        await chrome.tabs.remove(activeTabId);
-      } catch (e) {}
-
-      // 5. SAVE
-      bgMachine.transition(States.SAVE, { result });
-      if (result.email) {
-        queueManager.markDone(currentJob.id, { email: result.email, status: result.status });
-      } else {
-        queueManager.markFailed(currentJob.id, result.status || "Not Found");
+      await saveState();
+      
+      // 2. POLL_APIFY_STATUS
+      bgMachine.transition(States.POLL_APIFY_STATUS, { runId });
+      let status = runInfo.status;
+      
+      while (isRunning && (status === 'READY' || status === 'RUNNING')) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        status = await pollApifyRun(runId);
+        log(`Apify batch execution status: ${status}`);
       }
       
-      await exportManager.appendResult(currentJob.id, currentJob.data);
-      await saveState();
-
-    } catch (err) {
-      error(`Scraping error for row ${currentJob.id}`, err);
-      try {
-        if (activeTabId) await chrome.tabs.remove(activeTabId);
-      } catch (e) {}
+      if (!isRunning) {
+        break; // Paused or stopped
+      }
       
-      queueManager.markFailed(currentJob.id, err.message || "Failed");
-      await exportManager.appendResult(currentJob.id, currentJob.data);
+      if (status !== 'SUCCEEDED') {
+        throw new Error(`Apify run ended with state: ${status}`);
+      }
+      
+      // 3. FETCH_APIFY_DATASET
+      bgMachine.transition(States.FETCH_APIFY_DATASET, { datasetId });
+      const items = await fetchDatasetItems(datasetId);
+      log(`Fetched ${items.length} records from Apify for this batch.`);
+      
+      // 4. SAVE
+      bgMachine.transition(States.SAVE);
+      
+      // Map items back
+      for (const job of currentBatch) {
+        const resolvedUrl = jobUrlMap.get(job.id);
+        if (!resolvedUrl) {
+          queueManager.markFailed(job.id, 'No profile resolved');
+          await exportManager.appendResult(job.id, job.data);
+          continue;
+        }
+        
+        const resolvedClean = getLinkedInUrl(resolvedUrl);
+        const matchedItem = items.find(item => {
+          const itemUrl = getLinkedInUrl(item.linkedinUrl || item.linkedin_url || item.profileUrl || item.url || item.profile_url);
+          return itemUrl && (itemUrl.includes(resolvedClean) || resolvedClean.includes(itemUrl));
+        });
+        
+        if (matchedItem && (matchedItem.has_email || matchedItem.work_email || (matchedItem.personal_emails && matchedItem.personal_emails.length > 0))) {
+          const email = matchedItem.has_email || matchedItem.work_email || matchedItem.personal_emails[0];
+          queueManager.markDone(job.id, { email, status: 'Found', linkedin: resolvedUrl });
+        } else {
+          queueManager.markFailed(job.id, 'Not Found');
+          job.data.linkedin = resolvedUrl;
+        }
+        
+        await exportManager.appendResult(job.id, job.data);
+      }
+      
       await saveState();
-    }
-
-    // 6. NEXT_ROW
-    bgMachine.transition(States.NEXT_ROW);
-    if (!queueManager.isEmpty() && isRunning) {
-      const waitTime = Math.floor(Math.random() * (6000 - 3000 + 1)) + 3000;
-      await new Promise(res => setTimeout(res, waitTime));
+      
+    } catch (err) {
+      error("Static batch Apify execution failed", err);
+      currentBatch.forEach(job => {
+        queueManager.markFailed(job.id, err.message || "Failed");
+        exportManager.appendResult(job.id, job.data);
+      });
+      await saveState();
     }
   }
-
+  
   isRunning = false;
   bgMachine.transition(States.IDLE);
   
-  if (queueManager.getPending().length === 0) {
-    log("All jobs completed. Finalizing export...");
-    await finalizeJob();
-  }
+  await finalizeJob();
 }
 
 /**
@@ -405,141 +556,158 @@ async function runActiveSheetLoop() {
   let emptyRowStreak = 0;
   const maxEmptyRows = 10;
   
-  log("[SheetsBot] Row-by-row active Sheet loop started.");
+  await initApifyConfig();
+  
+  if (!APIFY_TOKEN) {
+    error("[SheetsBot] No Apify token found in .env!");
+    activeSheetLoopRunning = false;
+    bgMachine.transition(States.IDLE);
+    return;
+  }
+  
+  log("[SheetsBot] Active Sheet loop started via Apify.");
   
   exportManager.clear();
-  currentIndex = 0;
+  let currentIndex = 0;
   await saveState();
   broadcastProgress();
   
   while (activeSheetLoopRunning && emptyRowStreak < maxEmptyRows) {
-    let cellResp;
     try {
-      cellResp = await sendSheetMessage({ cmd: "readActiveCell" });
-    } catch (err) {
-      error("Failed to communicate with active sheet tab.", err);
-      break;
-    }
-    
-    const value = cellResp ? cellResp.value : '';
-    if (!value) {
-      emptyRowStreak++;
-      log(`[SheetsBot] Empty cell. Streak: ${emptyRowStreak}/${maxEmptyRows}. Moving down...`);
+      let cellResp;
       try {
-        await sendSheetMessage({ cmd: "moveDown" });
-      } catch (e) {}
-      await new Promise(res => setTimeout(res, 1000));
-      continue;
-    }
-    
-    emptyRowStreak = 0;
-    currentIndex++;
-    
-    const cleanUrl = getLinkedInUrl(value);
-    if (cleanUrl) {
-      log(`[SheetsBot] Reconstructed profile URL: ${cleanUrl}`);
+        cellResp = await sendSheetMessage({ cmd: "readActiveCell" });
+      } catch (err) {
+        error("Failed to communicate with active sheet tab.", err);
+        break;
+      }
       
-      let emailFound = "";
-      let status = "Not Found";
+      const value = cellResp ? cellResp.value : '';
+      if (!value) {
+        emptyRowStreak++;
+        log(`[SheetsBot] Empty cell. Streak: ${emptyRowStreak}/${maxEmptyRows}. Moving down...`);
+        try {
+          await sendSheetMessage({ cmd: "moveDown" });
+        } catch (e) {}
+        await new Promise(res => setTimeout(res, 1000));
+        continue;
+      }
       
-      try {
-        // 1. OPEN_PROFILE
-        bgMachine.transition(States.OPEN_PROFILE, { url: cleanUrl });
-        const tab = await chrome.tabs.create({ url: cleanUrl, active: true });
-        activeTabId = tab.id;
-
-        // 2. WAIT_READY
-        bgMachine.transition(States.WAIT_READY);
-        await waitForTabComplete(activeTabId);
-
-        // 3. START_SCRAPER
-        bgMachine.transition(States.START_SCRAPER);
-        await chrome.scripting.executeScript({
-          target: { tabId: activeTabId },
-          files: [
-            "utils/selectors.js",
-            "utils/WaitManager.js",
-            "utils/DOMObserver.js",
-            "utils/StateMachine.js",
-            "utils/RetryManager.js",
-            "content.js"
-          ]
-        });
-
-        // 4. WAIT_RESULT
-        bgMachine.transition(States.WAIT_RESULT);
-        const result = await new Promise((resolve) => {
-          scrapePromiseResolve = resolve;
-          setTimeout(() => {
-            if (scrapePromiseResolve === resolve) {
-              resolve({ email: "", status: "Timeout" });
+      emptyRowStreak = 0;
+      currentIndex++;
+      
+      // Resolve target founder profile
+      let targetUrl = null;
+      const cleanUrl = getLinkedInUrl(value);
+      
+      if (cleanUrl) {
+        if (cleanUrl.includes("/company/")) {
+          const handleMatch = cleanUrl.match(/\/company\/([a-zA-Z0-9\-_]+)/);
+          const handle = handleMatch ? handleMatch[1] : "";
+          if (handle) {
+            try {
+              targetUrl = await findFounderProfile(handle);
+            } catch (e) {}
+          }
+        } else {
+          targetUrl = cleanUrl;
+        }
+      } else {
+        // Treat the cell content as a company name
+        try {
+          targetUrl = await findFounderProfile(value);
+        } catch (e) {}
+      }
+      
+      if (targetUrl) {
+        log(`[SheetsBot] Resolved founder profile: ${targetUrl}`);
+        
+        let emailFound = "";
+        let status = "Not Found";
+        
+        try {
+          // 1. START_APIFY_RUN
+          bgMachine.transition(States.START_APIFY_RUN, { url: targetUrl });
+          const runInfo = await startApifyRun([targetUrl]);
+          const runId = runInfo.id;
+          const datasetId = runInfo.defaultDatasetId;
+          
+          // 2. POLL_APIFY_STATUS
+          bgMachine.transition(States.POLL_APIFY_STATUS, { runId });
+          let runStatus = runInfo.status;
+          while (activeSheetLoopRunning && (runStatus === 'READY' || runStatus === 'RUNNING')) {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            runStatus = await pollApifyRun(runId);
+          }
+          
+          if (runStatus === 'SUCCEEDED') {
+            // 3. FETCH_APIFY_DATASET
+            bgMachine.transition(States.FETCH_APIFY_DATASET, { datasetId });
+            const items = await fetchDatasetItems(datasetId);
+            if (items.length > 0) {
+              const item = items[0];
+              emailFound = item.has_email || item.work_email || (item.personal_emails && item.personal_emails[0]) || "";
+              status = emailFound ? "Found" : "Not Found";
             }
-          }, 45000);
-        });
-
-        // Close the tab
+          } else {
+            status = `Failed: ${runStatus}`;
+          }
+          
+        } catch (err) {
+          error(`[SheetsBot] Apify failed for profile ${targetUrl}`, err);
+          status = `Error: ${err.message || err}`;
+        }
+        
+        if (!activeSheetLoopRunning) {
+          log("[SheetsBot] Automation stopped.");
+          break;
+        }
+        
+        // 5. SAVE
+        bgMachine.transition(States.SAVE, { email: emailFound, status });
+        const jobData = { id: currentIndex, company: value, linkedin: targetUrl, email: emailFound, status: status };
+        await exportManager.appendResult(currentIndex, jobData);
+        await saveState();
+        
+        // Reactivate sheet tab
         try {
-          await chrome.tabs.remove(activeTabId);
+          await chrome.tabs.update(activeSheetTabId, { active: true });
+          await new Promise(res => setTimeout(res, 800));
         } catch (e) {}
-
-        emailFound = result.email;
-        status = result.status;
-
-      } catch (err) {
-        error(`[SheetsBot] Failed to scrape profile ${cleanUrl}`, err);
-        status = `Error: ${err.message || err}`;
+        
         try {
-          if (activeTabId) await chrome.tabs.remove(activeTabId);
-        } catch (e) {}
-      }
-      
-      if (!activeSheetLoopRunning) {
-        log("[SheetsBot] Automation was paused or stopped during scraping.");
-        break;
-      }
-      
-      // 5. SAVE
-      bgMachine.transition(States.SAVE, { email: emailFound, status });
-      const jobData = { id: currentIndex, company: "Active Sheet Row " + currentIndex, linkedin: cleanUrl, email: emailFound, status: status };
-      await exportManager.appendResult(currentIndex, jobData);
-      await saveState();
-      
-      // Reactivate sheet tab
-      try {
-        await chrome.tabs.update(activeSheetTabId, { active: true });
-        await new Promise(res => setTimeout(res, 800));
-      } catch (e) {}
-      
-      try {
-        await sendSheetMessage({ 
-          cmd: "writeResultAndMove", 
-          text: emailFound || status 
-        });
-      } catch (err) {
-        error("[SheetsBot] Failed to write result and move", err);
-        break;
-      }
-      
-      // 6. NEXT_ROW
-      bgMachine.transition(States.NEXT_ROW);
-      const waitTime = Math.floor(Math.random() * (6000 - 3500 + 1)) + 3500;
-      await new Promise(res => setTimeout(res, waitTime));
-      
-    } else {
-      log(`[SheetsBot] Active cell value ("${value}") is not a valid LinkedIn URL. Skipping down...`);
-      const jobData = { id: currentIndex, company: "Active Sheet Row " + currentIndex, linkedin: value, email: "", status: "Invalid URL" };
-      await exportManager.appendResult(currentIndex, jobData);
-      await saveState();
+          await sendSheetMessage({ 
+            cmd: "writeResultAndMove", 
+            text: emailFound || status 
+          });
+        } catch (err) {
+          error("[SheetsBot] Failed to write result and move", err);
+          break;
+        }
+        
+        // 6. NEXT_ROW
+        bgMachine.transition(States.IDLE);
+        await new Promise(res => setTimeout(res, 2000));
+        
+      } else {
+        log(`[SheetsBot] Could not resolve a founder profile for "${value}". Skipping...`);
+        const jobData = { id: currentIndex, company: value, linkedin: "", email: "", status: "Founder profile not found" };
+        await exportManager.appendResult(currentIndex, jobData);
+        await saveState();
 
-      try {
-        await chrome.tabs.update(activeSheetTabId, { active: true });
+        try {
+          await chrome.tabs.update(activeSheetTabId, { active: true });
+          await new Promise(res => setTimeout(res, 500));
+          await sendSheetMessage({ 
+            cmd: "writeResultAndMove", 
+            text: "Founder profile not found" 
+          });
+        } catch (e) {}
         await new Promise(res => setTimeout(res, 500));
-        await sendSheetMessage({ 
-          cmd: "writeResultAndMove", 
-          text: "Invalid URL" 
-        });
-      } catch (e) {}
-      await new Promise(res => setTimeout(res, 500));
+      }
+    } catch (loopErr) {
+      error("[SheetsBot] Unexpected error in active sheet loop iteration:", loopErr);
+      await new Promise(res => setTimeout(res, 2000));
     }
   }
   
@@ -568,7 +736,7 @@ async function saveState() {
 }
 
 /**
- * Broadcasts progress details to any listener.
+ * Broadcasts progress details to popup UI.
  */
 function broadcastProgress() {
   const currentIndex = queueManager.getDone().length + queueManager.getFailed().length;

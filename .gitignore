@@ -1,0 +1,3 @@
+# Exclude environment variables containing sensitive keys
+linkedin-email-extension/.env
+.env

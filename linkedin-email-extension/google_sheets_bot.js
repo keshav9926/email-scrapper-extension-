@@ -47,15 +47,21 @@
       }
     }
 
-    // 2. Google Sheets specific keyboard focus handler
-    const gsHandler = document.querySelector('.grid-keyboard-handler');
-    if (gsHandler && document.activeElement !== gsHandler) {
-      try {
-        gsHandler.focus();
-      } catch (e) {}
+    // 2. Google Sheets specific keyboard focus handler (skip if currently focused on formula bar)
+    const activeEl = document.activeElement;
+    const formulaBar = getFormulaBar();
+    const isFormulaBar = formulaBar && (activeEl === formulaBar || formulaBar.contains(activeEl));
+    
+    if (!isFormulaBar) {
+      const gsHandler = document.querySelector('.grid-keyboard-handler');
+      if (gsHandler && document.activeElement !== gsHandler) {
+        try {
+          gsHandler.focus();
+        } catch (e) {}
+      }
     }
     
-    const activeEl = document.activeElement || document.body;
+    const currentActive = document.activeElement || document.body;
     const code = getKeyCode(key);
     
     const eventInit = {
@@ -68,11 +74,11 @@
     };
     
     // Simulate KeyDown and KeyUp on the active element
-    activeEl.dispatchEvent(new KeyboardEvent('keydown', eventInit));
-    activeEl.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+    currentActive.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+    currentActive.dispatchEvent(new KeyboardEvent('keyup', eventInit));
 
     // For Excel Online, also dispatch globally to document to catch capturing/global event listeners
-    if (activeEl !== document.body) {
+    if (currentActive !== document.body) {
       document.dispatchEvent(new KeyboardEvent('keydown', eventInit));
       document.dispatchEvent(new KeyboardEvent('keyup', eventInit));
     }
@@ -129,35 +135,60 @@
 
   // Handle instructions from background service worker
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    console.log("[SheetsBot] Received command:", msg.cmd);
+    
     if (msg.cmd === "readActiveCell") {
       const formulaBar = getFormulaBar();
       let value = '';
       if (formulaBar) {
         value = (formulaBar.value || formulaBar.textContent || formulaBar.innerText || '').trim();
       }
+      console.log("[SheetsBot] readActiveCell returning value:", value);
       sendResponse({ value });
+      return true;
     }
     
     else if (msg.cmd === "moveDown") {
+      console.log("[SheetsBot] Pressing ArrowDown...");
       pressKey('ArrowDown');
       sendResponse({ success: true });
+      return true;
     }
     
     else if (msg.cmd === "writeResultAndMove") {
+      console.log("[SheetsBot] Writing result and moving:", msg.text);
       (async () => {
-        // Move selection right to the adjacent email column
-        pressKey('ArrowRight');
-        await delay(500);
-        
-        // Write result to the sheet cell (saves with Enter, moving down one row)
-        await writeToActiveCell(msg.text);
-        await delay(500);
-        
-        // Navigate back left to the original column (which is now on the next row)
-        pressKey('ArrowLeft');
-        await delay(400);
-        
-        sendResponse({ success: true });
+        try {
+          // Move selection right to the adjacent email column
+          pressKey('ArrowRight');
+          await delay(500);
+          
+          // Write result to the sheet cell (saves with Enter, moving down one row)
+          await writeToActiveCell(msg.text);
+          await delay(500);
+          
+          // Verify if formula bar is still focused. If so, blur it to force commit.
+          const activeEl = document.activeElement;
+          const formulaBar = getFormulaBar();
+          if (formulaBar && (activeEl === formulaBar || formulaBar.contains(activeEl))) {
+            try {
+              formulaBar.blur();
+            } catch (e) {}
+            await delay(200);
+            // Since blur doesn't move selection down, we explicitly press ArrowDown!
+            pressKey('ArrowDown');
+            await delay(300);
+          }
+          
+          // Navigate back left to the original column (which is now on the next row)
+          pressKey('ArrowLeft');
+          await delay(400);
+          
+          sendResponse({ success: true });
+        } catch (e) {
+          console.error("[SheetsBot] Error writing result and moving:", e);
+          sendResponse({ success: false, error: e.message || String(e) });
+        }
       })();
       return true; // Keep message channel open for async response
     }

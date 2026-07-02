@@ -3,7 +3,7 @@
   "name": "LinkedIn Email Scraper",
   "version": "1.0",
   "description": "Reads an Excel of LinkedIn URLs, uses SalesQL to extract emails, exports results.",
-  "permissions": ["scripting", "storage", "downloads"],
+  "permissions": ["scripting", "storage", "downloads", "tabs", "activeTab"],
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://docs.google.com/*",
@@ -11,7 +11,9 @@
     "https://*.office.com/*",
     "https://*.office365.com/*",
     "https://*.onedrive.com/*",
-    "https://1drv.ms/*"
+    "https://1drv.ms/*",
+    "https://api.apify.com/*",
+    "https://html.duckduckgo.com/*"
   ],
   "background": {
     "service_worker": "background.js",

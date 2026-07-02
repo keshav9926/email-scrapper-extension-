@@ -118,11 +118,11 @@ async function handleFileSelect() {
     }
     
     // Validate rows
-    const validRows = rows.filter(row => row.linkedin);
-    addLog(`Successfully parsed Excel file. Found ${validRows.length} rows with LinkedIn profiles.`, "success");
+    const validRows = rows.filter(row => row.linkedin || row.company);
+    addLog(`Successfully parsed Excel file. Found ${validRows.length} rows with LinkedIn profiles or company names.`, "success");
     
     if (validRows.length === 0) {
-      addLog("Error: No rows containing a LinkedIn URL were detected. Check columns names (e.g. 'LinkedIn', 'URL').", "error");
+      addLog("Error: No rows containing a LinkedIn URL or Company Name were detected.", "error");
       return;
     }
 

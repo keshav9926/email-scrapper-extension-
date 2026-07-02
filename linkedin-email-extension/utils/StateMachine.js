@@ -3,24 +3,22 @@
 
 (function() {
   const States = {
-    // Background automation states
+    // Background automation states (Apify Flow)
     IDLE: 'IDLE',
-    OPEN_PROFILE: 'OPEN_PROFILE',
-    WAIT_READY: 'WAIT_READY',
-    START_SCRAPER: 'START_SCRAPER',
-    WAIT_RESULT: 'WAIT_RESULT',
+    START_APIFY_RUN: 'START_APIFY_RUN',
+    POLL_APIFY_STATUS: 'POLL_APIFY_STATUS',
+    FETCH_APIFY_DATASET: 'FETCH_APIFY_DATASET',
     SAVE: 'SAVE',
-    NEXT_ROW: 'NEXT_ROW',
-    
-    // Content script scraping states
+    DONE: 'DONE',
+    FAILED: 'FAILED',
+
+    // Legacy/Browser-based states (kept for fallback / content logging compatibility)
     PAGE_LOADING: 'PAGE_LOADING',
     LINKEDIN_READY: 'LINKEDIN_READY',
     SALESQL_READY: 'SALESQL_READY',
     CLICK_REVEAL: 'CLICK_REVEAL',
     WAIT_EMAIL: 'WAIT_EMAIL',
-    EMAIL_FOUND: 'EMAIL_FOUND',
-    DONE: 'DONE',
-    FAILED: 'FAILED'
+    EMAIL_FOUND: 'EMAIL_FOUND'
   };
 
   class StateMachine {
@@ -41,7 +39,7 @@
       if (this.onTransition) {
         this.onTransition(oldState, newState, metadata);
       } else {
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
         console.log(`[${time}] [${this.name}] ${oldState} ➔ ${newState}`, metadata);
       }
     }
@@ -51,7 +49,6 @@
     }
   }
 
-  // Export globally for both Service Worker and Content Script contexts
   const exportLib = { States, StateMachine };
   
   if (typeof globalThis !== 'undefined') {

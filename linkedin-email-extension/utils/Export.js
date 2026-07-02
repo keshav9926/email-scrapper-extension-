@@ -18,11 +18,13 @@ export class ExportManager {
     
     const existingIndex = this.results.findIndex(r => r.id === jobId);
     const formattedResult = {
+      id: jobId,
       company: rowData.company || `Row ${jobId}`,
       linkedin: rowData.linkedin,
       email: rowData.email || "",
       status: rowData.status || "Not Found",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      raw: rowData.raw || null
     };
 
     if (existingIndex > -1) {

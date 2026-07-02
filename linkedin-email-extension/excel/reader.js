@@ -24,7 +24,9 @@ export function readExcel(arrayBuffer) {
       if (lowerKey.includes("linkedin") || lowerKey === "url" || lowerKey === "profile" || lowerKey === "link") {
         linkedinUrl = String(row[key]).trim();
       }
-      if (lowerKey.includes("company") || lowerKey.includes("firm") || lowerKey === "name") {
+      if (lowerKey.includes("company") || lowerKey.includes("firm")) {
+        companyName = String(row[key]).trim();
+      } else if (lowerKey === "name" && !companyName) {
         companyName = String(row[key]).trim();
       }
     }
