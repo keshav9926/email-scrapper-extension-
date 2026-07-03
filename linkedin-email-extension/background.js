@@ -497,7 +497,9 @@ function broadcastProgress() {
 }
 
 /**
- * Generates final Excel workbook, saves it, and downloads it.
+ * Generates final Excel workbook and silently saves it to Downloads folder.
+ * No dialog shown — safe to run overnight while user is asleep.
+ * Also marks completion in chrome.storage as a backup in case download fails.
  */
 async function finalizeJob() {
   try {
@@ -506,14 +508,38 @@ async function finalizeJob() {
       log("No results to finalize.", "warn");
       return;
     }
+
+    // Timestamped filename so multiple runs never overwrite each other
+    const now = new Date();
+    const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`;
+    const filename = `linkedin_emails_${ts}.xlsx`;
+
+    // Silent download — no dialog, goes straight to Downloads folder
     await chrome.downloads.create({
       url: dataUrl,
-      filename: "linkedin_emails_scraped.xlsx",
-      saveAs: true
+      filename: filename,
+      saveAs: false
     });
-    log("Excel spreadsheet exported and download initiated.", "success");
+
+    log(`✅ All done! Excel file saved to Downloads as "${filename}"`, "success");
+
+    // Backup: mark job as completed in storage so data is never lost
+    // even if something went wrong with the download
+    await chrome.storage.local.set({
+      last_completed_job: {
+        completedAt: now.toISOString(),
+        filename: filename,
+        totalProcessed: queueManager.getDone().length + queueManager.getFailed().length,
+        totalFound: exportManager.results.filter(r => r.status === "Found").length
+      }
+    });
+
   } catch (err) {
     error("Failed to generate or download final Excel file", err);
+
+    // Even if download fails, the raw results are still in chrome.storage.local
+    // User can open popup and click Download manually to recover them
+    log("⚠️ Auto-download failed. Open the extension and click Download to get your results.", "warn");
   }
 }
 

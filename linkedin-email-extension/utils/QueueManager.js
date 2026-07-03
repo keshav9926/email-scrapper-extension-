@@ -59,10 +59,30 @@ export class QueueManager {
 
   /**
    * Deserialize/restore state from chrome.storage.
+   * Any jobs stuck in 'Running' state (from a crashed/killed service worker)
+   * are reset to 'Pending' so they are retried on next run.
    */
   restore(serializedJobs) {
     if (Array.isArray(serializedJobs)) {
       this.jobs = serializedJobs;
+      this.resetRunningToPending(); // crash recovery
+    }
+  }
+
+  /**
+   * Resets any orphaned 'Running' jobs back to 'Pending'.
+   * Called on restore to recover from service worker termination mid-job.
+   */
+  resetRunningToPending() {
+    let recovered = 0;
+    for (const job of this.jobs) {
+      if (job.state === 'Running') {
+        job.state = 'Pending';
+        recovered++;
+      }
+    }
+    if (recovered > 0) {
+      console.warn(`[QueueManager] Recovered ${recovered} orphaned job(s) from 'Running' → 'Pending'.`);
     }
   }
 
