@@ -21,6 +21,14 @@ const bgMachine = new StateMachine("BackgroundController", (oldState, newState, 
   broadcastProgress();
 });
 
+// Global error handlers to catch and report uncaught service worker errors
+self.addEventListener('error', (event) => {
+  error("Uncaught service worker error", event.error || event.message);
+});
+self.addEventListener('unhandledrejection', (event) => {
+  error("Unhandled promise rejection in service worker", event.reason);
+});
+
 let isRunning = false;
 let currentLoopId = 0;
 const queueManager = new QueueManager();
@@ -547,6 +555,7 @@ async function runStaticQueueLoop() {
         }
       }
 
+      log("[SAVE] Processing batch results...");
       for (const b of batch) {
         const normUrl = normalize(b.linkedin);
         const result = itemsMap.get(normUrl);
@@ -576,15 +585,19 @@ async function runStaticQueueLoop() {
           linkedin: b.linkedin
         });
 
+        log(`[SAVE] Saving result for job ${b.job.id}...`);
         await exportManager.appendResult(b.job.id, {
           ...b.job.data,
           email,
           status: finalStatus
         });
+        log(`[SAVE] Saved result for job ${b.job.id}.`);
         if (myLoopId !== currentLoopId) return;
       }
 
+      log("[SAVE] Saving execution state...");
       await saveState();
+      log("[SAVE] Done saving execution state.");
       if (myLoopId !== currentLoopId) return;
 
     } catch (err) {
