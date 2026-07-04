@@ -8,3 +8,15 @@ node_modules/
 # Exclude generated scraped output excel files
 scraped_*.xlsx
 scraped_*.xls
+
+# Exclude local debug scripts and logs
+check_sheet_cols.js
+check_sheet_cols.log
+check_token_owner.js
+debug.log
+get_bulk_schema.js
+list_all_runs.js
+test_anchor.js
+test_gviz_parse.js
+test_snipercoder.js
+*.log

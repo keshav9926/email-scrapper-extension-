@@ -541,3 +541,196 @@ body {
   border-radius: 8px;
   margin-bottom: 12px;
 }
+
+/* Start From Row zone */
+.start-from-row-zone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  margin-bottom: 4px;
+  padding: 8px 12px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+}
+
+.start-from-label {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-primary);
+  white-space: nowrap;
+  cursor: default;
+}
+
+#resumeAfterUrl {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+#resumeAfterUrl:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.3);
+}
+
+/* --- Quick Batch Preset Buttons ----------------------------- */
+.quick-batch-zone {
+  margin-bottom: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+}
+
+.quick-batch-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 9px;
+}
+
+.quick-batch-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.batch-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.batch-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  background: rgba(255,255,255,0.08);
+}
+
+.batch-btn:hover::before { opacity: 1; }
+.batch-btn:hover { transform: translateY(-2px) scale(1.02); }
+.batch-btn:active { transform: translateY(1px) scale(0.99); }
+
+/* Batch A - indigo/violet */
+.batch-btn-a {
+  background: linear-gradient(135deg, rgba(99,102,241,0.25) 0%, rgba(168,85,247,0.2) 100%);
+  border: 1px solid rgba(99,102,241,0.45);
+  box-shadow: 0 4px 16px rgba(99,102,241,0.2), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+.batch-btn-a:hover {
+  border-color: rgba(99,102,241,0.7);
+  box-shadow: 0 6px 24px rgba(99,102,241,0.35);
+}
+.batch-btn-a .batch-btn-icon { color: #818cf8; }
+.batch-btn-a .batch-btn-title { color: #a5b4fc; }
+.batch-btn-a .batch-btn-range { color: #e0e7ff; }
+
+/* Batch B - emerald/cyan */
+.batch-btn-b {
+  background: linear-gradient(135deg, rgba(16,185,129,0.22) 0%, rgba(6,182,212,0.18) 100%);
+  border: 1px solid rgba(16,185,129,0.4);
+  box-shadow: 0 4px 16px rgba(16,185,129,0.18), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+.batch-btn-b:hover {
+  border-color: rgba(16,185,129,0.65);
+  box-shadow: 0 6px 24px rgba(16,185,129,0.32);
+}
+.batch-btn-b .batch-btn-icon { color: #34d399; }
+.batch-btn-b .batch-btn-title { color: #6ee7b7; }
+.batch-btn-b .batch-btn-range { color: #d1fae5; }
+
+.batch-btn-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+}
+
+.batch-btn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.batch-btn-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.batch-btn-range {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.batch-btn-sub {
+  font-size: 9px;
+  color: rgba(255,255,255,0.45);
+  font-weight: 400;
+}
+
+.quick-batch-hint {
+  margin-top: 8px;
+  font-size: 9.5px;
+  color: var(--text-muted);
+  text-align: center;
+  opacity: 0.7;
+}
+
+/* Number inputs */
+#startFromRow, #endAtRow {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+#startFromRow:focus, #endAtRow:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.3);
+}
+
+/* Stack labels+inputs vertically in start-from zone */
+.start-from-row-zone {
+  flex-direction: column;
+  align-items: stretch;
+}

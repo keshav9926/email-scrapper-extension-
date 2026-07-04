@@ -2,43 +2,45 @@
 // Assumes XLSX library is loaded (globally in popup/background)
 
 /**
- * Reads an Excel file (ArrayBuffer) and returns normalized row objects.
- * @param {ArrayBuffer} arrayBuffer 
- * @returns {Array<Object>} list of rows with company and linkedin fields
+ * Reads an Excel file and returns rows using column I (index 8) as the LinkedIn URL.
+ * Column I is always the individual's LinkedIn profile URL.
  */
 export function readExcel(arrayBuffer) {
   if (typeof XLSX === 'undefined') {
     throw new Error("SheetJS (XLSX) library is not loaded.");
   }
+
   const workbook = XLSX.read(arrayBuffer, { type: 'array' });
   const firstSheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[firstSheetName];
-  const rawRows = XLSX.utils.sheet_to_json(worksheet);
-  
-  return rawRows.map((row, index) => {
-    let linkedinUrl = "";
-    let companyName = "";
-    
-    for (const key of Object.keys(row)) {
-      const lowerKey = key.toLowerCase().trim();
-      if (lowerKey.includes("linkedin") || lowerKey === "url" || lowerKey === "profile" || lowerKey === "link") {
-        const val = String(row[key]).trim();
-        if (val && !linkedinUrl) {
-          linkedinUrl = val;
-        }
-      }
-      if (lowerKey.includes("company") || lowerKey.includes("firm")) {
-        companyName = String(row[key]).trim();
-      } else if (lowerKey === "name" && !companyName) {
-        companyName = String(row[key]).trim();
-      }
+
+  // header: 1 → returns raw arrays, no header interpretation
+  const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+
+  const results = [];
+
+  for (let i = 1; i < rawRows.length; i++) { // skip row 0 (header)
+    const row = rawRows[i];
+    const linkedinRaw = String(row[8] || "").trim(); // Column I = index 8
+
+    // Skip rows where column I is empty or not a LinkedIn URL
+    if (!linkedinRaw || !linkedinRaw.includes("linkedin.com/")) continue;
+
+    // Normalize URL
+    let linkedin = linkedinRaw;
+    if (!linkedin.startsWith("http")) {
+      linkedin = "https://" + linkedin;
     }
-    
-    return {
-      id: index + 1,
-      company: companyName || "Unknown",
-      linkedin: (linkedinUrl && linkedinUrl.startsWith("https://www.linkedin.com/")) ? linkedinUrl.trim() : "",
+    linkedin = linkedin.replace("http://", "https://")
+                       .replace("https://linkedin.com/", "https://www.linkedin.com/");
+
+    results.push({
+      id: i + 1,
+      company: String(row[0] || "Unknown").trim(), // Column A as fallback name/company
+      linkedin,
       raw: row
-    };
-  });
+    });
+  }
+
+  return results;
 }

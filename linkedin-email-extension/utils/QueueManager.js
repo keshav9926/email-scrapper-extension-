@@ -10,8 +10,8 @@ export class QueueManager {
    * Initialize queue from fresh Excel rows.
    */
   initialize(rows) {
-    this.jobs = rows.map((row, index) => ({
-      id: index + 1, // 1-indexed row number
+    this.jobs = rows.map((row) => ({
+      id: row.id, // Preserve original spreadsheet row number
       data: { ...row, email: row.email || "", status: row.status || "" },
       state: 'Pending'
     }));
@@ -26,6 +26,18 @@ export class QueueManager {
       job.state = 'Running';
     }
     return job;
+  }
+
+  /**
+   * Gets up to batchSize Pending jobs and marks them as Running.
+   */
+  getNextPendingBatch(batchSize) {
+    const pendingJobs = this.jobs.filter(j => j.state === 'Pending');
+    const batch = pendingJobs.slice(0, batchSize);
+    for (const job of batch) {
+      job.state = 'Running';
+    }
+    return batch;
   }
 
   /**
@@ -108,6 +120,80 @@ export class QueueManager {
 
   isEmpty() {
     return this.getPending().length === 0;
+  }
+
+  /**
+   * Marks all jobs with id < startFromRow as 'Skipped'.
+   * They count toward processed total (for correct progress %) but are never run.
+   * Since jobs are initialized in spreadsheet row order, this guarantees
+   * we start from exactly the Nth row of the original file.
+   */
+  skipBefore(startFromRow) {
+    let count = 0;
+    for (const job of this.jobs) {
+      if (job.id < startFromRow && job.state === 'Pending') {
+        job.state = 'Skipped';
+        job.data = { ...job.data, status: 'Skipped' };
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Marks all jobs up to AND INCLUDING the one matching resumeUrl as 'Skipped'.
+   * Uses normalized URL comparison (lowercase, trailing slash stripped) for robustness.
+   * This is the recommended resume method — pass the LinkedIn URL of the last processed person.
+   */
+  skipUpToAndIncluding(resumeUrl) {
+    if (!resumeUrl) return 0;
+
+    const normalize = (url) => String(url || '').toLowerCase().trim().replace(/\/$/, '');
+    const targetNorm = normalize(resumeUrl);
+
+    // Find the job whose linkedin URL matches
+    let matchId = -1;
+    for (const job of this.jobs) {
+      const jobUrl = normalize(job.data.linkedin || '');
+      if (jobUrl === targetNorm) {
+        matchId = job.id;
+        break;
+      }
+    }
+
+    if (matchId === -1) return 0; // URL not found in queue
+
+    // Mark all jobs up to and including matchId as Skipped
+    let count = 0;
+    for (const job of this.jobs) {
+      if (job.id <= matchId && job.state === 'Pending') {
+        job.state = 'Skipped';
+        job.data = { ...job.data, status: 'Skipped' };
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Marks all jobs with id > endAtRow as 'Skipped'.
+   * Use this to cap processing at a specific row number (inclusive end).
+   * e.g. skipFrom(2132) means process rows up to and INCLUDING 2132, skip everything after.
+   */
+  skipFrom(endAtRow) {
+    let count = 0;
+    for (const job of this.jobs) {
+      if (job.id > endAtRow && job.state === 'Pending') {
+        job.state = 'Skipped';
+        job.data = { ...job.data, status: 'Skipped' };
+        count++;
+      }
+    }
+    return count;
+  }
+
+  getSkipped() {
+    return this.jobs.filter(j => j.state === 'Skipped');
   }
 
   clear() {

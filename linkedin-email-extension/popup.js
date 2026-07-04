@@ -1,6 +1,8 @@
 // popup.js
 import { readExcel } from './excel/reader.js';
 
+let loadedRows = null;
+
 // DOM Elements
 const fileInput = document.getElementById('fileInput');
 const dropZone = document.getElementById('dropZone');
@@ -52,7 +54,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       const activeTabUrl = activeTab.url;
       const activeTabId = activeTab.id;
       btnScrapeActiveTab.addEventListener('click', () => {
-        handleLoadUrl(activeTabUrl, activeTabId);
+        const resumeAfterUrl = document.getElementById('resumeAfterUrl').value.trim();
+        const startFromRow = parseInt(document.getElementById('startFromRow').value.trim(), 10) || 0;
+        const endAtRow = parseInt(document.getElementById('endAtRow').value.trim(), 10) || 0;
+        handleLoadUrl(activeTabUrl, activeTabId, resumeAfterUrl, startFromRow, endAtRow);
       });
     }
   });
@@ -63,7 +68,64 @@ document.addEventListener('DOMContentLoaded', async () => {
       addLog("Please enter a valid Google Sheets URL.", "warn");
       return;
     }
-    handleLoadUrl(url);
+    const resumeAfterUrl = document.getElementById('resumeAfterUrl').value.trim();
+    const startFromRow = parseInt(document.getElementById('startFromRow').value.trim(), 10) || 0;
+    const endAtRow = parseInt(document.getElementById('endAtRow').value.trim(), 10) || 0;
+    handleLoadUrl(url, null, resumeAfterUrl, startFromRow, endAtRow);
+  });
+
+
+  // ? Quick Batch Launch buttons
+  function fireBatchPreset(startRow, endRow) {
+    document.getElementById('startFromRow').value = startRow > 1 ? startRow : '';
+    document.getElementById('endAtRow').value    = endRow   > 0 ? endRow   : '';
+    document.getElementById('resumeAfterUrl').value = '';
+
+    if (loadedRows) {
+      addLog(`Preset selected for local spreadsheet. Starting automation for rows ${startRow} → ${endRow || 'last'}...`, "info");
+      chrome.runtime.sendMessage({ cmd: "start", rows: loadedRows, resumeAfterUrl: '', startFromRow: startRow, endAtRow: endRow }, (response) => {
+        if (response && response.success) {
+          addLog(`Automation started with local spreadsheet preset.`, "success");
+          restoreSession();
+        }
+      });
+      return;
+    }
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const activeTab = tabs[0];
+      const isGoogleSheet = activeTab && activeTab.url && activeTab.url.includes('docs.google.com/spreadsheets');
+      const pastedUrl = document.getElementById('sheetUrlInput').value.trim();
+
+      if (isGoogleSheet) {
+        handleLoadUrl(activeTab.url, activeTab.id, '', startRow, endRow);
+      } else if (pastedUrl) {
+        handleLoadUrl(pastedUrl, null, '', startRow, endRow);
+      } else {
+        addLog('?? Paste a Google Sheets URL below, or open the sheet in a tab first.', 'warn');
+      }
+    });
+  }
+
+  document.getElementById('btnBatchA').addEventListener('click', () => fireBatchPreset(1, 2132));
+  document.getElementById('btnBatchB').addEventListener('click', () => fireBatchPreset(3167, 0));
+
+  // Mutual clearing for input fields to prevent conflicts
+  const startInput = document.getElementById('startFromRow');
+  const endInput = document.getElementById('endAtRow');
+  const resumeInput = document.getElementById('resumeAfterUrl');
+
+  startInput.addEventListener('input', () => {
+    if (startInput.value) resumeInput.value = '';
+  });
+  endInput.addEventListener('input', () => {
+    if (endInput.value) resumeInput.value = '';
+  });
+  resumeInput.addEventListener('input', () => {
+    if (resumeInput.value) {
+      startInput.value = '';
+      endInput.value = '';
+    }
   });
 
   // 5. Control Button events
@@ -80,9 +142,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   await restoreSession();
 });
 
-function handleLoadUrl(url, tabId = null) {
-  addLog("Retrieving spreadsheet link...", "info");
-  chrome.runtime.sendMessage({ cmd: "loadSheetUrl", url: url, tabId: tabId }, (response) => {
+function handleLoadUrl(url, tabId = null, resumeAfterUrl = "", startFromRow = 0, endAtRow = 0) {
+  let msg;
+  if (resumeAfterUrl) {
+    msg = `Retrieving spreadsheet... will resume after URL: ${resumeAfterUrl}`;
+  } else if (startFromRow > 1 && endAtRow > 0) {
+    msg = `Retrieving spreadsheet... will process Sr. No. ${startFromRow} → ${endAtRow}`;
+  } else if (startFromRow > 1) {
+    msg = `Retrieving spreadsheet... will start from Sr. No. ${startFromRow}`;
+  } else if (endAtRow > 0) {
+    msg = `Retrieving spreadsheet... will process rows 1 → ${endAtRow}`;
+  } else {
+    msg = "Retrieving spreadsheet link...";
+  }
+  addLog(msg, "info");
+  chrome.runtime.sendMessage({ cmd: "loadSheetUrl", url, tabId, resumeAfterUrl, startFromRow, endAtRow }, (response) => {
     if (chrome.runtime.lastError) {
       addLog("Failed to send message to background worker.", "error");
       return;
@@ -169,10 +243,27 @@ async function handleFileSelect() {
       return;
     }
 
+    loadedRows = validRows;
+
     // Send rows to background service worker to begin
-    chrome.runtime.sendMessage({ cmd: "start", rows: validRows }, (response) => {
+    const resumeAfterUrl = document.getElementById('resumeAfterUrl').value.trim();
+    const startFromRow = parseInt(document.getElementById('startFromRow').value.trim(), 10) || 0;
+    const endAtRow = parseInt(document.getElementById('endAtRow').value.trim(), 10) || 0;
+    chrome.runtime.sendMessage({ cmd: "start", rows: validRows, resumeAfterUrl, startFromRow, endAtRow }, (response) => {
       if (response && response.success) {
-        addLog("Automation loop started.", "system");
+        let msg;
+        if (resumeAfterUrl) {
+          msg = `Automation started. Skipping rows up to and including URL: ${resumeAfterUrl}`;
+        } else if (startFromRow > 1 && endAtRow > 0) {
+          msg = `Automation started. Processing Sr. No. ${startFromRow} → ${endAtRow}.`;
+        } else if (startFromRow > 1) {
+          msg = `Automation started from Sr. No. ${startFromRow}. Skipped ${startFromRow - 1} rows.`;
+        } else if (endAtRow > 0) {
+          msg = `Automation started. Processing rows 1 → ${endAtRow}.`;
+        } else {
+          msg = "Automation loop started from the beginning.";
+        }
+        addLog(msg, "system");
       }
     });
 
@@ -277,7 +368,9 @@ function updateUI(state) {
   // Update exact emails found from cached result count (will count items status: "Found")
   chrome.storage.local.get("scrape_results", (data) => {
     const resultsList = data.scrape_results || [];
-    const foundCount = resultsList.filter(item => item.status === "Found").length;
+    const foundCount = resultsList.filter(item => {
+      return item.status === "Found" || (item.email && item.email.trim() !== "");
+    }).length;
     statFound.innerText = foundCount;
   });
 
@@ -296,6 +389,12 @@ function resetUI() {
   statusBadge.innerText = "Idle";
   statusBadge.className = "status-badge";
   fileInput.value = "";
+  loadedRows = null; // Clear cached local file rows
+  
+  // Clear all range/resume inputs
+  document.getElementById('startFromRow').value = "";
+  document.getElementById('endAtRow').value = "";
+  document.getElementById('resumeAfterUrl').value = "";
 }
 
 /**
