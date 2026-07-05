@@ -5,7 +5,11 @@
  * @param {Object} state - { currentIndex, results, queue, totalJobs, isRunning }
  */
 export async function saveCheckpoint(state) {
-  await chrome.storage.local.set({ checkpoint: state });
+  try {
+    await chrome.storage.local.set({ checkpoint: state });
+  } catch (err) {
+    console.error("[Storage] Failed to save checkpoint:", err);
+  }
 }
 
 /**
@@ -13,15 +17,24 @@ export async function saveCheckpoint(state) {
  * @returns {Promise<Object|null>}
  */
 export async function getCheckpoint() {
-  const data = await chrome.storage.local.get('checkpoint');
-  return data.checkpoint || null;
+  try {
+    const data = await chrome.storage.local.get('checkpoint');
+    return data.checkpoint || null;
+  } catch (err) {
+    console.error("[Storage] Failed to get checkpoint:", err);
+    return null;
+  }
 }
 
 /**
  * Clears the saved checkpoint.
  */
 export async function clearCheckpoint() {
-  await chrome.storage.local.remove('checkpoint');
+  try {
+    await chrome.storage.local.remove('checkpoint');
+  } catch (err) {
+    console.error("[Storage] Failed to clear checkpoint:", err);
+  }
 }
 
 /**
@@ -29,7 +42,11 @@ export async function clearCheckpoint() {
  * @param {Array<Object>} results 
  */
 export async function saveResults(results) {
-  await chrome.storage.local.set({ scrape_results: results });
+  try {
+    await chrome.storage.local.set({ scrape_results: results });
+  } catch (err) {
+    console.error("[Storage] Failed to save results:", err);
+  }
 }
 
 /**
@@ -37,13 +54,22 @@ export async function saveResults(results) {
  * @returns {Promise<Array<Object>>}
  */
 export async function getResults() {
-  const data = await chrome.storage.local.get('scrape_results');
-  return data.scrape_results || [];
+  try {
+    const data = await chrome.storage.local.get('scrape_results');
+    return data.scrape_results || [];
+  } catch (err) {
+    console.error("[Storage] Failed to get results:", err);
+    return [];
+  }
 }
 
 /**
  * Clears both the checkpoint and saved results to start a new job.
  */
 export async function clearAll() {
-  await chrome.storage.local.remove(['checkpoint', 'scrape_results']);
+  try {
+    await chrome.storage.local.remove(['checkpoint', 'scrape_results', 'original_rows']);
+  } catch (err) {
+    console.error("[Storage] Failed to clear all:", err);
+  }
 }

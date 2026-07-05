@@ -36,7 +36,9 @@ const exportManager = new ExportManager();
 
 // Global configuration loaded dynamically from .env
 let APIFY_TOKEN = "";
-const APIFY_ACTOR_KEY = "snipercoder~bulk-linkedin-email-finder";
+let APIFY_ACTOR_KEY = "snipercoder~bulk-linkedin-email-finder";
+let APIFY_FALLBACK_TOKEN = "";
+let APIFY_FALLBACK_ACTOR_KEY = "";
 
 async function initApifyConfig() {
   try {
@@ -46,14 +48,33 @@ async function initApifyConfig() {
     const lines = text.split('\n');
     for (const line of lines) {
       const parts = line.split('=');
-      if (parts[0] && parts[0].trim().toLowerCase() === 'token') {
-        APIFY_TOKEN = parts.slice(1).join('=').trim();
-        log(`Apify token successfully loaded from .env: ${APIFY_TOKEN.substring(0, 8)}...`);
-        break;
+      if (parts.length >= 2) {
+        const key = parts[0].trim().toLowerCase();
+        const val = parts.slice(1).join('=').trim();
+        if (key === 'token' || key === 'apify_token') {
+          APIFY_TOKEN = val;
+        } else if (key === 'actor' || key === 'actor_key') {
+          APIFY_ACTOR_KEY = val;
+        } else if (key === 'fallback_token') {
+          APIFY_FALLBACK_TOKEN = val;
+        } else if (key === 'fallback_actor' || key === 'fallback_actor_key') {
+          APIFY_FALLBACK_ACTOR_KEY = val;
+        }
       }
     }
+    if (APIFY_TOKEN) {
+      log(`Apify token successfully loaded from .env: ${APIFY_TOKEN.substring(0, 8)}...`);
+    }
+    if (!APIFY_FALLBACK_TOKEN && APIFY_TOKEN) {
+      APIFY_FALLBACK_TOKEN = APIFY_TOKEN;
+    }
+    log(`Apify Config Loaded:`);
+    log(`  Primary Actor: ${APIFY_ACTOR_KEY}`);
+    if (APIFY_FALLBACK_ACTOR_KEY) {
+      log(`  Fallback Actor: ${APIFY_FALLBACK_ACTOR_KEY}`);
+    }
   } catch (e) {
-    warn("Failed to load .env file, using default fallback token.");
+    warn("Failed to load .env file, using default fallback config.");
   }
 }
 
@@ -62,7 +83,9 @@ async function initApifyConfig() {
   try {
     const checkpoint = await getCheckpoint();
     if (checkpoint) {
-      queueManager.restore(checkpoint.queue);
+      const data = await chrome.storage.local.get('original_rows');
+      const originalRows = data.original_rows || [];
+      queueManager.restore(checkpoint.queue, originalRows);
       isRunning = checkpoint.isRunning;
       await exportManager.load();
 
@@ -87,6 +110,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     clearAll().then(async () => {
       await initApifyConfig();
+      try {
+        await chrome.storage.local.set({ original_rows: rows });
+      } catch (err) {
+        error("Failed to save original rows to storage", err);
+      }
 
       queueManager.initialize(rows);
 
@@ -234,6 +262,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const endAtRow = msg.endAtRow || 0;
 
       await clearAll();
+      try {
+        await chrome.storage.local.set({ original_rows: validRows });
+      } catch (err) {
+        error("Failed to save original rows to storage", err);
+      }
       queueManager.initialize(validRows);
 
       if (resumeAfterUrl) {
@@ -292,12 +325,21 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 /**
  * Trigger an Apify Actor Run.
  */
-async function startApifyRun(urls) {
-  const endpoint = `https://api.apify.com/v2/acts/${APIFY_ACTOR_KEY}/runs?token=${APIFY_TOKEN}`;
+async function startApifyRun(urls, actorKey = APIFY_ACTOR_KEY, token = APIFY_TOKEN) {
+  const endpoint = `https://api.apify.com/v2/acts/${actorKey}/runs?token=${token}`;
+  
+  // Make payload compatible with multiple possible Apify actors:
+  // - linkedin_url_or_ids: for snipercoder~bulk-linkedin-email-finder
+  // - urls: generic url list
+  // - queries: array of objects { url }
+  // - linkedin: single profile url
   const payload = {
-    linkedin_url_or_ids: urls  // snipercoder actor expects linkedin_url_or_ids: ["url1", "url2"]
+    linkedin_url_or_ids: urls,
+    urls: urls,
+    queries: urls.map(u => ({ url: u })),
+    linkedin: urls.length === 1 ? urls[0] : urls
   };
-  log("Apify input payload: " + JSON.stringify(payload));
+  log(`Apify input payload for ${actorKey}: ` + JSON.stringify(payload));
 
   const response = await fetch(endpoint, {
     method: "POST",
@@ -311,15 +353,15 @@ async function startApifyRun(urls) {
   }
 
   const json = await response.json();
-  log("Apify start run result: " + JSON.stringify(json.data));
+  log(`Apify start run result for ${actorKey}: ` + JSON.stringify(json.data));
   return json.data;
 }
 
 /**
  * Fetch status of Apify run.
  */
-async function pollApifyRun(runId) {
-  const endpoint = `https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_TOKEN}`;
+async function pollApifyRun(runId, token = APIFY_TOKEN) {
+  const endpoint = `https://api.apify.com/v2/actor-runs/${runId}?token=${token}`;
   const response = await fetch(endpoint);
   if (!response.ok) {
     throw new Error(`Failed to fetch run status: HTTP ${response.status}`);
@@ -336,14 +378,14 @@ async function pollApifyRun(runId) {
 /**
  * Fetch elements from completed dataset.
  */
-async function fetchDatasetItems(datasetId) {
-  const endpoint = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}`;
+async function fetchDatasetItems(datasetId, token = APIFY_TOKEN) {
+  const endpoint = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${token}`;
   const response = await fetch(endpoint);
   if (!response.ok) {
     throw new Error(`Failed to fetch dataset items: HTTP ${response.status}`);
   }
   const json = await response.json();
-  console.log(json);
+  console.log("[DEBUG] Raw fetched dataset items:", json);
   return json;
 }
 
@@ -396,6 +438,12 @@ function getValidEmail(result) {
         }
       }
     }
+  }
+
+  // Debug logging requested by the user: print all keys/values before returning ""
+  console.log("[DEBUG getValidEmail] No email found. Full object keys/values:");
+  for (const key of Object.keys(result)) {
+    console.log(`  "${key}":`, result[key]);
   }
 
   return "";
@@ -473,19 +521,18 @@ async function runStaticQueueLoop() {
     }
 
     // Process skipped jobs first
-    for (const item of skippedJobs) {
-      const { job, status } = item;
-      log(`Skipping row ${job.id}: ${status}`, "warn");
-      queueManager.markFailed(job.id, status);
-      await exportManager.appendResult(job.id, {
-        ...job.data,
-        email: "",
-        status: status
-      });
-      if (myLoopId !== currentLoopId) return;
-    }
-
     if (skippedJobs.length > 0) {
+      for (const item of skippedJobs) {
+        const { job, status } = item;
+        log(`Skipping row ${job.id}: ${status}`, "warn");
+        queueManager.markFailed(job.id, status);
+        exportManager.appendResultInMemory(job.id, {
+          ...job.data,
+          email: "",
+          status: status
+        });
+      }
+      await exportManager.save();
       await saveState();
       if (myLoopId !== currentLoopId) return;
     }
@@ -551,23 +598,66 @@ async function runStaticQueueLoop() {
       const items = await fetchDatasetItems(datasetId);
       if (myLoopId !== currentLoopId) return;
       log(`Fetched ${items.length} records from Apify for this batch.`);
+      console.log("[DEBUG] Raw fetched dataset items:", items);
 
       // 4. SAVE
       bgMachine.transition(States.SAVE);
 
       const getLinkedinFromItem = (item) => {
         if (!item) return "";
-        let url = item.url || item["06_Linkedin_url"] || item["Linkedin_url"] || item["linkedin_url"] || item["17_Query_linkedin"] || item["Query Linkedin"] || "";
-        if (url && !url.includes("linkedin.com")) {
-          url = `https://www.linkedin.com/in/${url}`;
+        const candidates = [
+          item.url,
+          item.linkedin,
+          item.linkedinUrl,
+          item.linkedin_url,
+          item.profileUrl,
+          item.profile_url,
+          item["06_Linkedin_url"],
+          item["Linkedin_url"],
+          item["17_Query_linkedin"],
+          item["Query Linkedin"],
+          item.query,
+          item.input
+        ];
+        for (const url of candidates) {
+          if (typeof url === 'string' && url.includes('linkedin.com/')) {
+            return url;
+          }
         }
-        return url;
+        for (const key of Object.keys(item)) {
+          const val = item[key];
+          if (typeof val === 'string' && val.includes('linkedin.com/')) {
+            return val;
+          }
+        }
+        const handleCandidates = [
+          item["06_Linkedin_url"],
+          item["Linkedin_url"],
+          item.linkedin_url,
+          item.linkedin,
+          item.username,
+          item.handle,
+          item["17_Query_linkedin"],
+          item["Query_linkedin"],
+          item["Query LinkedIn"],
+          item.query,
+          item.input
+        ];
+        for (const val of handleCandidates) {
+          if (typeof val === 'string' && val.trim() && !val.includes('linkedin.com') && /^[a-zA-Z0-9\-_]+$/.test(val.trim())) {
+            return `https://www.linkedin.com/in/${val.trim()}`;
+          }
+        }
+        return "";
       };
 
       const normalize = (url) => {
         if (!url) return "";
-        let clean = String(url).toLowerCase().trim().replace(/\/$/, '');
-        clean = clean.replace(/^https?:\/\//, '').replace(/^www\./, '');
+        let clean = String(url).toLowerCase().trim();
+        clean = clean.split('?')[0].split('#')[0];
+        clean = clean.replace(/\/+$/, '');
+        clean = clean.replace(/^https?:\/\//, '');
+        clean = clean.replace(/^[a-z0-9-]+\.linkedin\.com/, 'linkedin.com');
         return clean;
       };
 
@@ -579,7 +669,10 @@ async function runStaticQueueLoop() {
         }
       }
 
-      log("[SAVE] Processing batch results...");
+      const fallbackUrls = [];
+      const primaryResults = new Map();
+
+      log("[SAVE] Processing primary batch results...");
       for (const b of batch) {
         const normUrl = normalize(b.linkedin);
         const result = itemsMap.get(normUrl);
@@ -589,7 +682,10 @@ async function runStaticQueueLoop() {
 
         if (!result) {
           finalStatus = "No Results";
+          log(`[MATCHING FAILED] Could not find result in itemsMap for normalized URL: "${normUrl}"`, 'warn');
+          console.log("[MATCHING FAILED] normUrl:", normUrl, "Available keys in itemsMap:", [...itemsMap.keys()]);
         } else {
+          console.log("[DEBUG] Passing result to getValidEmail:", result);
           email = getValidEmail(result);
           if (email) {
             finalStatus = "Found";
@@ -600,8 +696,86 @@ async function runStaticQueueLoop() {
             } else {
               finalStatus = "Email Not Found";
             }
+            diagnoseMissingEmail(result, b.job.id);
           }
         }
+
+        primaryResults.set(normUrl, { email, result, status: finalStatus });
+
+        if (!email && APIFY_FALLBACK_ACTOR_KEY) {
+          fallbackUrls.push(b.linkedin);
+        }
+      }
+
+      // 4.5. Optional Fallback Actor Execution
+      if (fallbackUrls.length > 0 && APIFY_FALLBACK_ACTOR_KEY) {
+        log(`Running fallback actor "${APIFY_FALLBACK_ACTOR_KEY}" for ${fallbackUrls.length} failed profiles...`);
+        try {
+          const fallbackRunInfo = await startApifyRun(fallbackUrls, APIFY_FALLBACK_ACTOR_KEY, APIFY_FALLBACK_TOKEN);
+          const fallbackRunId = fallbackRunInfo.id;
+          const fallbackDatasetId = fallbackRunInfo.defaultDatasetId || fallbackRunInfo.datasetId;
+
+          if (fallbackDatasetId) {
+            let fallbackStatus = fallbackRunInfo.status;
+            while (isRunning && myLoopId === currentLoopId && (fallbackStatus === 'READY' || fallbackStatus === 'RUNNING')) {
+              await new Promise(resolve => setTimeout(resolve, 5000));
+              if (myLoopId !== currentLoopId) return;
+              fallbackStatus = await pollApifyRun(fallbackRunId, APIFY_FALLBACK_TOKEN);
+              if (myLoopId !== currentLoopId) return;
+              log(`Apify fallback run status: ${fallbackStatus}`);
+            }
+
+            if (isRunning && myLoopId === currentLoopId && fallbackStatus === 'SUCCEEDED') {
+              const fallbackItems = await fetchDatasetItems(fallbackDatasetId, APIFY_FALLBACK_TOKEN);
+              log(`Fetched ${fallbackItems.length} records from fallback actor.`);
+
+              const fallbackItemsMap = new Map();
+              for (const item of fallbackItems) {
+                const itemUrl = getLinkedinFromItem(item);
+                if (itemUrl) {
+                  fallbackItemsMap.set(normalize(itemUrl), item);
+                }
+              }
+
+              for (const b of batch) {
+                const normUrl = normalize(b.linkedin);
+                const prevRes = primaryResults.get(normUrl);
+                if (prevRes && !prevRes.email) {
+                  const fallbackResult = fallbackItemsMap.get(normUrl);
+                  if (fallbackResult) {
+                    console.log("[DEBUG] Passing fallback result to getValidEmail:", fallbackResult);
+                    const fallbackEmail = getValidEmail(fallbackResult);
+                    if (fallbackEmail) {
+                      log(`[FALLBACK SUCCESS] Found email for "${normUrl}" using fallback actor!`, 'success');
+                      primaryResults.set(normUrl, {
+                        email: fallbackEmail,
+                        result: fallbackResult,
+                        status: "Found"
+                      });
+                    } else {
+                      log(`[FALLBACK INFO] Fallback actor also did not find email for "${normUrl}".`);
+                      diagnoseMissingEmail(fallbackResult, b.job.id);
+                    }
+                  } else {
+                    log(`[FALLBACK INFO] No result found in fallback dataset for "${normUrl}".`, 'warn');
+                  }
+                }
+              }
+            } else {
+              log(`Fallback run failed or ended with state: ${fallbackStatus}`, 'error');
+            }
+          }
+        } catch (fallbackErr) {
+          error(`Fallback run execution failed`, fallbackErr);
+        }
+      }
+
+      log("[SAVE] Processing batch results...");
+      for (const b of batch) {
+        const normUrl = normalize(b.linkedin);
+        const saved = primaryResults.get(normUrl) || { email: "", status: "No Results" };
+        const email = saved.email;
+        const finalStatus = saved.status;
 
         queueManager.markDone(b.job.id, {
           email,
@@ -609,17 +783,15 @@ async function runStaticQueueLoop() {
           linkedin: b.linkedin
         });
 
-        log(`[SAVE] Saving result for job ${b.job.id}...`);
-        await exportManager.appendResult(b.job.id, {
+        exportManager.appendResultInMemory(b.job.id, {
           ...b.job.data,
           email,
           status: finalStatus
         });
-        log(`[SAVE] Saved result for job ${b.job.id}.`);
-        if (myLoopId !== currentLoopId) return;
       }
 
       log("[SAVE] Saving execution state...");
+      await exportManager.save();
       await saveState();
       log("[SAVE] Done saving execution state.");
       if (myLoopId !== currentLoopId) return;
@@ -629,12 +801,12 @@ async function runStaticQueueLoop() {
       // Mark all jobs in this batch as failed (can be retried)
       for (const b of batch) {
         queueManager.markFailed(b.job.id, err.message || "Failed");
-        await exportManager.appendResult(b.job.id, {
+        exportManager.appendResultInMemory(b.job.id, {
           ...b.job.data,
           status: "Failed"
         });
-        if (myLoopId !== currentLoopId) return;
       }
+      await exportManager.save();
       await saveState();
       if (myLoopId !== currentLoopId) return;
     }
@@ -714,14 +886,18 @@ async function finalizeJob() {
 
     // Backup: mark job as completed in storage so data is never lost
     // even if something went wrong with the download
-    await chrome.storage.local.set({
-      last_completed_job: {
-        completedAt: now.toISOString(),
-        filename: filename,
-        totalProcessed: queueManager.getDone().length + queueManager.getFailed().length,
-        totalFound: exportManager.results.filter(r => r.status === "Found").length
-      }
-    });
+    try {
+      await chrome.storage.local.set({
+        last_completed_job: {
+          completedAt: now.toISOString(),
+          filename: filename,
+          totalProcessed: queueManager.getDone().length + queueManager.getFailed().length,
+          totalFound: exportManager.results.filter(r => r.status === "Found").length
+        }
+      });
+    } catch (err) {
+      error("Failed to save last completed job to storage", err);
+    }
 
   } catch (err) {
     error("Failed to generate or download final Excel file", err);
@@ -834,7 +1010,7 @@ function parseGvizResponse(text) {
     }
 
     return {
-      id: index + 1,
+      id: index + 2,
       company: companyName || "Unknown",
       linkedin: normalizedLinkedin,
       raw: rawRow

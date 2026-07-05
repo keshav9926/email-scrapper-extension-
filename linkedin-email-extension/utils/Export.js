@@ -13,9 +13,7 @@ export class ExportManager {
     this.results = await getResults();
   }
 
-  async appendResult(jobId, rowData) {
-    await this.load();
-    
+  appendResultInMemory(jobId, rowData) {
     const existingIndex = this.results.findIndex(r => r.id === jobId);
     const formattedResult = {
       id: jobId,
@@ -36,8 +34,16 @@ export class ExportManager {
     } else {
       this.results.push(formattedResult);
     }
+  }
 
+  async save() {
     await saveResults(this.results);
+  }
+
+  async appendResult(jobId, rowData) {
+    await this.load();
+    this.appendResultInMemory(jobId, rowData);
+    await this.save();
   }
 
   async getExcelDataUrl() {

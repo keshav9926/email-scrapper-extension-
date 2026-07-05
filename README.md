@@ -47,10 +47,20 @@ linkedin-email-extension/
 
 ## Installation & Setup
 
-### 1. Configure the Apify API Token
-Create a file named `.env` in the root of the `linkedin-email-extension` directory and supply your Apify API token:
+### 1. Configure the Apify API Token & Actors
+Create a file named `.env` in the root of the `linkedin-email-extension` directory and customize your configuration:
 ```env
+# Required: Your Apify API Token
 token=YOUR_APIFY_API_TOKEN
+
+# Optional: Override the default primary Apify Actor (default is snipercoder~bulk-linkedin-email-finder)
+actor=snipercoder~bulk-linkedin-email-finder
+
+# Optional: Set a fallback actor to run if the primary actor returns "Email Not Found"
+fallback_actor=apify~apollo-scraper
+
+# Optional: Set a fallback Apify API token (defaults to primary token if omitted)
+fallback_token=YOUR_FALLBACK_APIFY_API_TOKEN
 ```
 
 ### 2. Load the Chrome Extension

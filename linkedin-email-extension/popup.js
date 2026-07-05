@@ -86,7 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       chrome.runtime.sendMessage({ cmd: "start", rows: loadedRows, resumeAfterUrl: '', startFromRow: startRow, endAtRow: endRow }, (response) => {
         if (response && response.success) {
           addLog(`Automation started with local spreadsheet preset.`, "success");
-          restoreSession();
+          restoreSession(true);
         }
       });
       return;
@@ -139,11 +139,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 
   // 6. Restore current status
-  await restoreSession();
+  await restoreSession(true);
 
   // Periodically poll status to keep background worker awake and refresh UI
   setInterval(async () => {
-    await restoreSession();
+    await restoreSession(false);
   }, 5000);
 });
 
@@ -169,7 +169,7 @@ function handleLoadUrl(url, tabId = null, resumeAfterUrl = "", startFromRow = 0,
     if (response && response.success) {
       addLog(`Successfully loaded spreadsheet. Starting automation for ${response.count} rows.`, "success");
       // Update local storage status and stats immediately
-      restoreSession();
+      restoreSession(true);
     } else {
       const errorMsg = (response && response.error) ? response.error : "Unknown error";
       addLog(`Failed to load link: ${errorMsg}`, "error");
@@ -180,16 +180,18 @@ function handleLoadUrl(url, tabId = null, resumeAfterUrl = "", startFromRow = 0,
 /**
  * Checks current state of background scraper and restores UI state.
  */
-async function restoreSession() {
+async function restoreSession(shouldLog = false) {
   chrome.runtime.sendMessage({ cmd: "getStatus" }, (status) => {
     if (chrome.runtime.lastError) {
-      addLog("Failed to connect to automation backend.", "error");
+      if (shouldLog) addLog("Failed to connect to automation backend.", "error");
       return;
     }
     
     if (status && status.totalJobs > 0) {
       updateUI(status);
-      addLog(`Restored existing session: ${status.currentIndex}/${status.totalJobs} processed.`, "system");
+      if (shouldLog) {
+        addLog(`Restored existing session: ${status.currentIndex}/${status.totalJobs} processed.`, "system");
+      }
     }
   });
 }

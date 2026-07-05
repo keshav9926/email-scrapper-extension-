@@ -66,7 +66,19 @@ export class QueueManager {
    * Serialize state to store in chrome.storage.
    */
   serialize() {
-    return this.jobs;
+    return this.jobs.map(j => ({
+      id: j.id,
+      state: j.state,
+      linkedin: j.data.linkedin || "",
+      company: j.data.company || "",
+      raw: j.data.raw || null,
+      email: j.data.email || "",
+      status: j.data.status || "",
+      scrapedName: j.data.scrapedName || "",
+      scrapedTitle: j.data.scrapedTitle || "",
+      scrapedCompany: j.data.scrapedCompany || "",
+      scrapedLinkedin: j.data.scrapedLinkedin || ""
+    }));
   }
 
   /**
@@ -74,9 +86,28 @@ export class QueueManager {
    * Any jobs stuck in 'Running' state (from a crashed/killed service worker)
    * are reset to 'Pending' so they are retried on next run.
    */
-  restore(serializedJobs) {
+  restore(serializedJobs, originalRows = []) {
     if (Array.isArray(serializedJobs)) {
-      this.jobs = serializedJobs;
+      const rowsMap = new Map(originalRows.map(r => [r.id, r]));
+      this.jobs = serializedJobs.map(sj => {
+        const orig = rowsMap.get(sj.id) || {};
+        return {
+          id: sj.id,
+          state: sj.state,
+          data: {
+            ...orig,
+            linkedin: sj.linkedin || orig.linkedin || "",
+            company: sj.company || orig.company || "",
+            raw: sj.raw || orig.raw || null,
+            email: sj.email || "",
+            status: sj.status || "",
+            scrapedName: sj.scrapedName || "",
+            scrapedTitle: sj.scrapedTitle || "",
+            scrapedCompany: sj.scrapedCompany || "",
+            scrapedLinkedin: sj.scrapedLinkedin || ""
+          }
+        };
+      });
       this.resetRunningToPending(); // crash recovery
     }
   }
@@ -148,7 +179,15 @@ export class QueueManager {
   skipUpToAndIncluding(resumeUrl) {
     if (!resumeUrl) return 0;
 
-    const normalize = (url) => String(url || '').toLowerCase().trim().replace(/\/$/, '');
+    const normalize = (url) => {
+      if (!url) return "";
+      let clean = String(url).toLowerCase().trim();
+      clean = clean.split('?')[0].split('#')[0];
+      clean = clean.replace(/\/+$/, '');
+      clean = clean.replace(/^https?:\/\//, '');
+      clean = clean.replace(/^[a-z0-9-]+\.linkedin\.com/, 'linkedin.com');
+      return clean;
+    };
     const targetNorm = normalize(resumeUrl);
 
     // Find the job whose linkedin URL matches
