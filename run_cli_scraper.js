@@ -3,9 +3,9 @@ const path = require('path');
 const XLSX = require('xlsx');
 
 // Configuration
-const SHEET_URL = "https://docs.google.com/spreadsheets/d/1w11kuIGWOVATOad5acQqVWSzELF25xCyP6j3yoBiEUc/gviz/tq?tqx=out:json&gid=0";
+const SHEET_URL = "https://docs.google.com/spreadsheets/d/1w11kuIGWOVATOad5acQqVWSzELF25xCyP6j3yoBiEUc/gviz/tq?tqx=out:json&gid=0&headers=1";
 const ACTOR_KEY = "snipercoder~bulk-linkedin-email-finder";
-const BATCH_SIZE = 10; // Process 10 profiles per Apify run (faster and uses less startup credits)
+const BATCH_SIZE = 1; // Process 1 profiles per Apify run (faster and uses less startup credits)
 const CHECKPOINT_FILE = path.join(__dirname, 'cli_checkpoint.json');
 const OUTPUT_FILE = path.join(__dirname, 'scraped_results.xlsx');
 
@@ -65,7 +65,7 @@ function parseGvizResponse(text) {
   const table = json.table;
   const cols = table.cols.map((col, idx) => col.label || col.id || `Col${idx}`);
 
-  return table.rows.map((row, index) => {
+  return table.rows.slice(1).map((row, index) => {
     let linkedinUrl = "";
     let companyName = "";
     const rawRow = {};
@@ -102,7 +102,7 @@ function parseGvizResponse(text) {
     }
 
     return {
-      id: index + 2, // Row ID aligns exactly with spreadsheet row numbers
+      id: index + 4, // Row ID aligns exactly with spreadsheet row numbers (telli is Row 4)
       company: companyName || "Unknown",
       linkedin: normalizedLinkedin,
       raw: rawRow
@@ -395,6 +395,34 @@ async function main() {
       const items = await fetchDatasetItems(datasetId);
       log(`Fetched ${items.length} records. Mapping results...`);
 
+      // Check for hardcoded actor limit
+      const hasActorLimit = items.some(item => {
+        const nameVal = String(item["01_Name"] || "").toLowerCase();
+        const queryVal = String(item["17_Query_linkedin"] || "").toLowerCase();
+        return nameVal.includes("free users are limited") || queryVal.includes("limit_reached");
+      });
+
+      if (hasActorLimit) {
+        log("Apify Actor Limit Reached: Free users are limited to 1000 results.", "error");
+        log("Please upgrade your Apify actor subscription or use a new Apify token/account.", "error");
+        
+        // Mark remaining batch profiles as Limit Reached
+        for (const b of currentBatch) {
+          processedResults.push({
+            id: b.row.id,
+            company: b.row.company,
+            linkedin: b.linkedin,
+            email: "",
+            status: "Limit Reached",
+            timestamp: new Date().toISOString(),
+            raw: b.row.raw
+          });
+          currentIndex++;
+        }
+        await saveCheckpoint(currentIndex, processedResults);
+        throw new Error("Apify Actor Limit Reached. Scraper stopped.");
+      }
+
       // Map dataset items by normalized LinkedIn URL
       const itemsMap = new Map();
       for (const item of items) {
@@ -448,6 +476,9 @@ async function main() {
 
     } catch (e) {
       log(`Failed to process batch: ${e.message}`, "error");
+      if (e.message.includes("Limit Reached")) {
+        throw e;
+      }
       log("Marking batch jobs as failed and waiting 10s before retry...", "warn");
       
       // Fallback: Mark this batch as failed so progress can move forward if needed

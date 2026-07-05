@@ -600,6 +600,26 @@ async function runStaticQueueLoop() {
       log(`Fetched ${items.length} records from Apify for this batch.`);
       console.log("[DEBUG] Raw fetched dataset items:", items);
 
+      // Check for hardcoded actor limit
+      const hasActorLimit = items.some(item => {
+        const nameVal = String(item["01_Name"] || "").toLowerCase();
+        const queryVal = String(item["17_Query_linkedin"] || "").toLowerCase();
+        return nameVal.includes("free users are limited") || queryVal.includes("limit_reached");
+      });
+
+      if (hasActorLimit) {
+        log("Apify Actor Limit Reached: Free users are limited to 1000 results. Please upgrade your Apify actor subscription or use a new Apify token/account.", "error");
+        for (const b of batch) {
+          b.job.state = 'Failed';
+          b.job.status = 'Limit Reached';
+        }
+        await saveState();
+        isRunning = false;
+        await updateStorage({ isRunning: false });
+        bgMachine.transition(States.IDLE);
+        return;
+      }
+
       // 4. SAVE
       bgMachine.transition(States.SAVE);
 
