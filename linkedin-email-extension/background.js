@@ -441,7 +441,7 @@ async function runStaticQueueLoop() {
 
   bgMachine.transition(States.IDLE);
 
-  const BATCH_SIZE = 1;
+  const BATCH_SIZE = 5;
 
   while (isRunning && myLoopId === currentLoopId) {
     const pendingJobs = queueManager.getPending();
