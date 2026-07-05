@@ -70,6 +70,7 @@ async function initApifyConfig() {
 
       if (isRunning) {
         isRunning = false;
+        chrome.alarms.create("keepAliveAlarm", { periodInMinutes: 1 });
         runStaticQueueLoop();
       }
     }
@@ -107,6 +108,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       exportManager.clear();
       saveState().then(() => {
+        chrome.alarms.create("keepAliveAlarm", { periodInMinutes: 1 });
         runStaticQueueLoop();
       });
     });
@@ -117,6 +119,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.cmd === "pause") {
     log("Pausing execution...");
     isRunning = false;
+    chrome.alarms.clear("keepAliveAlarm");
     saveState().then(() => {
       bgMachine.transition(States.IDLE);
       sendResponse({ success: true });
@@ -127,6 +130,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.cmd === "resume") {
     log("Resuming execution...");
     if (!isRunning && queueManager.size() > 0) {
+      chrome.alarms.create("keepAliveAlarm", { periodInMinutes: 1 });
       runStaticQueueLoop();
     }
     sendResponse({ success: true });
@@ -136,6 +140,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.cmd === "stop") {
     log("Stopping execution and clearing progress.");
     isRunning = false;
+    chrome.alarms.clear("keepAliveAlarm");
     clearAll().then(() => {
       queueManager.clear();
       exportManager.clear();
@@ -262,6 +267,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
 
     return true;
+  }
+});
+
+// Alarm listener to prevent Chrome Service Worker termination during scraping
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "keepAliveAlarm") {
+    log("Keep-alive alarm triggered to prevent service worker termination.");
+    
+    // Perform a trivial storage lookup to wiggle/refresh service worker's life timer
+    chrome.storage.local.get("checkpoint").then(() => {
+      if (isRunning && queueManager.getPending().length > 0) {
+        // If background worker is stuck or died in a stale state, restart loop
+        const state = bgMachine.getState();
+        if (state === States.IDLE || state === States.SAVE) {
+          log("Scraper was active but loop was inactive. Restarting loop...", "warn");
+          runStaticQueueLoop();
+        }
+      }
+    });
   }
 });
 
@@ -624,6 +648,7 @@ async function runStaticQueueLoop() {
 
   if (myLoopId === currentLoopId) {
     isRunning = false;
+    chrome.alarms.clear("keepAliveAlarm");
     bgMachine.transition(States.IDLE);
     await finalizeJob();
   }

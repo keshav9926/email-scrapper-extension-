@@ -140,6 +140,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 6. Restore current status
   await restoreSession();
+
+  // Periodically poll status to keep background worker awake and refresh UI
+  setInterval(async () => {
+    await restoreSession();
+  }, 5000);
 });
 
 function handleLoadUrl(url, tabId = null, resumeAfterUrl = "", startFromRow = 0, endAtRow = 0) {
